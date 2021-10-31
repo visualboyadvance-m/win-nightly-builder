@@ -7,6 +7,7 @@ $env:VCPKG_ROOT     = '/source/repos/vcpkg'
 $env:VBAM_NO_PAUSE  = 1
 
 $REPO_PATH = '/source/repos/visualboyadvance-m-nightly'
+$WEB_DIR   = '/inetpub/wwwroot/nightly'
 
 $saved_env = [ordered]@{}
 
@@ -47,7 +48,7 @@ function load_vs_env {
     popd
 }
 
-$force_build = $false
+$force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
 if (-not (test-path $REPO_PATH)) {
     new-item -itemtype directory $REPO_PATH | out-null
@@ -115,7 +116,11 @@ foreach ($arch in 'x64', 'x86') {
     }
 }
 
-gci build-*/*.zip | %{ cpi -force $_ /inetpub/wwwroot/nightly }
+gci build-*/*.zip | %{ cpi -force $_ $WEB_DIR }
+
+if (test-path $WEB_DIR/web.config) {
+    ri -recurse -force $WEB_DIR/web.config
+}
 
 write-output @'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -124,7 +129,9 @@ write-output @'
         <directoryBrowse enabled="true" showFlags="Date, Time, Size, Extension, LongDate" />
     </system.webServer>
 </configuration>
-'@ > /inetpub/wwwroot/nightly/web.config
+'@ > $WEB_DIR/web.config
+
+(gi -force $WEB_DIR/web.config).attributes += 'hidden'
 
 popd
 
