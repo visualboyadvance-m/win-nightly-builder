@@ -7,7 +7,7 @@ $env:VCPKG_ROOT     = '/source/repos/vcpkg'
 $env:VBAM_NO_PAUSE  = 1
 
 $REPO_PATH = '/source/repos/visualboyadvance-m-nightly'
-$WEB_DIR   = '/inetpub/wwwroot/nightly'
+$STAGE_DIR = '/windows/temp/vbam-nightly-build'
 
 $saved_env = [ordered]@{}
 
@@ -21,10 +21,10 @@ function save_env {
 
 function restore_env {
     if ($saved_env.count) {
-	remove-item -force env:*
+	ri -fo env:*
 
 	$saved_env.getenumerator() | %{
-	    set-item -force "env:$($_.key)" -value $_.value
+	    set-item -fo "env:$($_.key)" -val $_.value
 	}
     }
 }
@@ -42,7 +42,7 @@ function load_vs_env {
     cmd /c "vcvars${bits}.bat & set" | where { $_ -match '=' } | %{
         $var,$val = $_.split('=')
 
-        set-item -force "env:$var" -value $val
+        set-item -fo "env:$var" -val $val
     }
 
     popd
@@ -51,7 +51,7 @@ function load_vs_env {
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
 if (-not (test-path $REPO_PATH)) {
-    new-item -itemtype directory $REPO_PATH | out-null
+    ni -it dir $REPO_PATH | out-null
 
     pushd (resolve-path "$REPO_PATH/..")
 
@@ -66,23 +66,35 @@ pushd $REPO_PATH
 
 git fetch --all --prune
 
-if ((-not $force_build) -and (git status | select-string '^Your branch is up to date with')) {
-    write-output 'INFO: No changes to build.'
+$head    = $(git rev-parse --short HEAD)
+$current = $(git rev-parse --short origin/master)
+
+$sources_changed = (
+    git diff --name-only "${head}..${current}" `
+	| grep -E 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
+	| measure -l
+).lines
+
+# Write date and time for beginning of check/build.
+date
+
+if ((-not $force_build) -and ($sources_changed -eq 0)) {
+    write 'INFO: No changes to build.'
     popd
     return
 }
 
-write-output "INFO: Build started on $(get-date)"
+write "INFO: Build started on $(date)."
 
 git pull --rebase
 
 foreach ($arch in 'x64', 'x86') {
     foreach ($build in 'Release', 'Debug') {
 	if (test-path "build-$arch-$build") {
-	    remove-item -recurse -force "build-$arch-$build"
+	    remove-item -r -fo "build-$arch-$build"
 	}
 
-	new-item -itemtype directory "build-$arch-$build" | out-null
+	new-item -it dir "build-$arch-$build" | out-null
 
 	load_vs_env $arch
 
@@ -116,23 +128,20 @@ foreach ($arch in 'x64', 'x86') {
     }
 }
 
-gci build-*/*.zip | %{ cpi -force $_ $WEB_DIR }
+ri -r -fo $STAGE_DIR -ea ignore
 
-if (test-path $WEB_DIR/web.config) {
-    ri -recurse -force $WEB_DIR/web.config
-}
+mkdir $STAGE_DIR | out-null
 
-write-output @'
-<?xml version="1.0" encoding="UTF-8"?>
-<configuration>
-    <system.webServer>
-        <directoryBrowse enabled="true" showFlags="Date, Time, Size, Extension, LongDate" />
-    </system.webServer>
-</configuration>
-'@ > $WEB_DIR/web.config
-
-(gi -force $WEB_DIR/web.config).attributes += 'hidden'
+gci build-*/*.zip | %{ cpi -fo $_ $STAGE_DIR }
 
 popd
 
-write-output 'INFO: Build successful!'
+pushd $STAGE_DIR
+
+gci -n | %{ echo "put $_`nchmod 664 $_" | sftp sftpuser@posixsh.org:nightly.vba-m.com/ }
+
+popd
+
+ri -r -fo $STAGE_DIR
+
+write 'INFO: Build successful!'
