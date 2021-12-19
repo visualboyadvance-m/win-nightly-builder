@@ -69,32 +69,44 @@ git fetch --all --prune
 $head    = $(git rev-parse --short HEAD)
 $current = $(git rev-parse --short origin/master)
 
-$sources_changed = (
+$sources_changed = $(
     git diff --name-only "${head}..${current}" `
-	| grep -E 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
-	| measure -l
-).lines
+	| grep -cE 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
+)
+
+$translations_changed = $(
+    git diff --name-only "${head}..${current}" `
+	| grep -cE 'po/wxvbam/.*\.po$' `
+)
 
 # Write date and time for beginning of check/build.
 date
 
-if ((-not $force_build) -and ($sources_changed -eq 0)) {
-    write 'INFO: No changes to build.'
-    popd
-    return
+if (($sources_changed      -eq 0) -and `
+    ($translations_changed -gt 0)) {
+	write 'INFO: Building translations.zip only.'
+	$translations_only = $true
+}
+
+if ((-not $force_build) -and `
+    ($sources_changed -eq 0) -and `
+    (-not $translations_only)) {
+	write 'INFO: No changes to build.'
+	popd
+	return
 }
 
 write "INFO: Build started on $(date)."
 
 git pull --rebase
 
-foreach ($arch in 'x64', 'x86') {
+:arch foreach ($arch in 'x64', 'x86') {
     foreach ($build in 'Release', 'Debug') {
 	if (test-path "build-$arch-$build") {
-	    remove-item -r -fo "build-$arch-$build"
+	    ri -r -fo "build-$arch-$build"
 	}
 
-	new-item -it dir "build-$arch-$build" | out-null
+	mkdir "build-$arch-$build" | out-null
 
 	load_vs_env $arch
 
@@ -102,8 +114,11 @@ foreach ($arch in 'x64', 'x86') {
 
 	$error = $null
 
+	$translations_only_str = if ($translations_only) `
+	    { 'TRUE' } else { 'FALSE' };
+
 	try {
-	    cmake .. -DVCPKG_TARGET_TRIPLET="${arch}-windows-static" -DCMAKE_BUILD_TYPE="$build" -DUPSTREAM_RELEASE=TRUE -G Ninja
+	    cmake .. -DVCPKG_TARGET_TRIPLET="${arch}-windows-static" -DCMAKE_BUILD_TYPE="$build" -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="${translations_only_str}" -G Ninja
 
 	    if (-not (test-path build.ninja)) { throw 'cmake failed' }
 
@@ -125,6 +140,10 @@ foreach ($arch in 'x64', 'x86') {
 	    popd
 	    return
 	}
+
+	if ($translations_only) {
+	    break arch
+	}
     }
 }
 
@@ -132,7 +151,12 @@ ri -r -fo $STAGE_DIR -ea ignore
 
 mkdir $STAGE_DIR | out-null
 
-gci build-*/*.zip | %{ cpi -fo $_ $STAGE_DIR }
+if (-not $translations_only) {
+    cpi -fo build-*/*.zip $STAGE_DIR
+}
+else {
+    cpi -fo build-*/translations.zip  $STAGE_DIR
+}
 
 popd
 
