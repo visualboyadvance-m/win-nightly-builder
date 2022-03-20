@@ -29,15 +29,13 @@ function restore_env {
     }
 }
 
-function load_vs_env {
-    param([string]$arch)
-
+function load_vs_env($arch) {
     $bits = if ($arch -eq 'x86') { 32 } else { 64 }
 
     restore_env
     save_env
 
-    pushd 'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build'
+    pushd 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build'
 
     cmd /c "vcvars${bits}.bat & set" | where { $_ -match '=' } | %{
         $var,$val = $_.split('=')
