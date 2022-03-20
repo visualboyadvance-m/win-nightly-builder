@@ -1,13 +1,14 @@
-chcp 65001 > $null
-
 set-culture en-US
+
+[Console]::OutputEncoding = [Console]::InputEncoding = `
+    $OutputEncoding = new-object System.Text.UTF8Encoding
 
 $env:PATH          += ';' + (resolve-path '/program files/git/cmd') + ';' + (resolve-path '/program files/osslsigncode')
 $env:VCPKG_ROOT     = '/source/repos/vcpkg'
 $env:VBAM_NO_PAUSE  = 1
 
-$REPO_PATH = '/source/repos/visualboyadvance-m-nightly'
-$STAGE_DIR = '/windows/temp/vbam-nightly-build'
+$repo_path = '/source/repos/visualboyadvance-m-nightly'
+$stage_dir = '/windows/temp/vbam-nightly-build'
 
 $saved_env = [ordered]@{}
 
@@ -48,10 +49,10 @@ function load_vs_env($arch) {
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
-if (-not (test-path $REPO_PATH)) {
-    ni -it dir $REPO_PATH | out-null
+if (-not (test-path $repo_path)) {
+    ni -it dir $repo_path | out-null
 
-    pushd (resolve-path "$REPO_PATH/..")
+    pushd (resolve-path "$repo_path/..")
 
     git clone 'https://github.com/visualboyadvance-m/visualboyadvance-m.git' visualboyadvance-m-nightly
 
@@ -60,7 +61,7 @@ if (-not (test-path $REPO_PATH)) {
     $force_build = $true
 }
 
-pushd $REPO_PATH
+pushd $repo_path
 
 git fetch --all --prune
 
@@ -69,12 +70,12 @@ $current = $(git rev-parse --short origin/master)
 
 $sources_changed = $(
     git diff --name-only "${head}..${current}" `
-	| grep -cE 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
+	| grep.exe -cE 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
 )
 
 $translations_changed = $(
     git diff --name-only "${head}..${current}" `
-	| grep -cE 'po/wxvbam/.*\.po$' `
+	| grep.exe -cE 'po/wxvbam/.*\.po$' `
 )
 
 # Write date and time for beginning of check/build.
@@ -82,19 +83,19 @@ date
 
 if (($sources_changed      -eq 0) -and `
     ($translations_changed -gt 0)) {
-	write 'INFO: Building translations.zip only.'
+	'INFO: Building translations.zip only.'
 	$translations_only = $true
 }
 
 if ((-not $force_build) -and `
     ($sources_changed -eq 0) -and `
     (-not $translations_only)) {
-	write 'INFO: No changes to build.'
+	'INFO: No changes to build.'
 	popd
 	return
 }
 
-write "INFO: Build started on $(date)."
+"INFO: Build started on $(date)."
 
 git pull --rebase
 
@@ -145,25 +146,25 @@ git pull --rebase
     }
 }
 
-ri -r -fo $STAGE_DIR -ea ignore
+ri -r -fo $stage_dir -ea ignore
 
-mkdir $STAGE_DIR | out-null
+mkdir $stage_dir | out-null
 
 if (-not $translations_only) {
-    cpi -fo build-*/*.zip $STAGE_DIR
+    cpi -fo build-*/*.zip $stage_dir
 }
 else {
-    cpi -fo build-*/translations.zip  $STAGE_DIR
+    cpi -fo build-*/translations.zip  $stage_dir
 }
 
 popd
 
-pushd $STAGE_DIR
+pushd $stage_dir
 
-gci -n | %{ echo "put $_`nchmod 664 $_" | sftp sftpuser@posixsh.org:nightly.vba-m.com/ }
+gci -n | %{ ("put {0}`nchmod 664 {0}" -f $_) | sftp sftpuser@posixsh.org:nightly.vba-m.com/ }
 
 popd
 
-ri -r -fo $STAGE_DIR
+ri -r -fo $stage_dir
 
-write 'INFO: Build successful!'
+'INFO: Build successful!'
