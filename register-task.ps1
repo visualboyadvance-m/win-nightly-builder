@@ -7,7 +7,9 @@ if (-not (test-path /logs)) { mkdir /logs }
 
 $action  = new-scheduledtaskaction `
     -execute (get-command pwsh).source `
-    -argument "-noprofile -executionpolicy remotesigned -command `"& '$(resolve-path $psscriptroot/build-nightly.ps1)' *>> /logs/build-nightly.log`""
+    -argument ("-noprofile -executionpolicy remotesigned " + `
+	"-command ""& '$(join-path $psscriptroot build-nightly.ps1)'""" + `
+	" *>> /logs/build-nightly.log")
 
 $password = (get-credential $env:username).getnetworkcredential().password
 
@@ -16,8 +18,7 @@ register-scheduledtask -force `
     -trigger $trigger -action $action `
     -user $env:username `
     -password $password `
-    -runlevel highest | out-null
+    -runlevel highest `
+    -ea stop | out-null
 
-write "Task '$taskname' successfully registered to run daily at $runat."
-
-# vim:sw=4 et:
+"Task '$taskname' successfully registered to run daily at $runat."
