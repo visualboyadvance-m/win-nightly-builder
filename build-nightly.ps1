@@ -1,4 +1,4 @@
-set-culture en-US
+[System.Globalization.CultureInfo]::CurrentCulture = 'en-US'
 
 [Console]::OutputEncoding = [Console]::InputEncoding = `
     $OutputEncoding = new-object System.Text.UTF8Encoding
@@ -31,14 +31,20 @@ function restore_env {
 }
 
 function load_vs_env($arch) {
-    $bits = if ($arch -eq 'x86') { 32 } else { 64 }
-
     restore_env
     save_env
 
     pushd 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build'
 
-    cmd /c "vcvars${bits}.bat & set" | where { $_ -match '=' } | %{
+    $bits = if ($arch -eq 'x86') { 32 } else { 64 }
+
+    $bat = if ($arch -eq 'arm64') {
+	'vcvarsamd64_arm64'
+    } else {
+	"vcvars${bits}"
+    }
+
+    cmd /c "${bat}.bat & set" | where { $_ -match '=' } | %{
         $var,$val = $_.split('=')
 
         set-item -fo "env:$var" -val $val
@@ -99,7 +105,7 @@ if ((-not $force_build) -and `
 
 git pull --rebase
 
-:arch foreach ($arch in 'x64', 'x86') {
+:arch foreach ($arch in 'x64', 'x86', 'arm64') {
     foreach ($build in 'Release', 'Debug') {
 	if (test-path "build-$arch-$build") {
 	    ri -r -fo "build-$arch-$build"
