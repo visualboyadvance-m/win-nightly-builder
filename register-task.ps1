@@ -18,7 +18,6 @@ register-scheduledtask -force `
     -trigger $trigger -action $action `
     -user $env:username `
     -password $password `
-    -runlevel highest `
     -ea stop | out-null
 
 "Task '$taskname' successfully registered to run daily at $runat."
