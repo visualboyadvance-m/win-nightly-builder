@@ -6,7 +6,7 @@ $trigger = new-scheduledtasktrigger -at $runat -daily
 if (-not (test-path /logs)) { mkdir /logs }
 
 $action  = new-scheduledtaskaction `
-    -execute (get-command pwsh).source `
+    -execute 'pwsh' `
     -argument ("-noprofile -executionpolicy remotesigned " + `
 	"-command ""& '$(join-path $psscriptroot build-nightly.ps1)'""" + `
 	" *>> /logs/build-nightly.log")
