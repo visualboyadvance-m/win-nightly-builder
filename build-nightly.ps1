@@ -34,7 +34,7 @@ function load_vs_env($arch) {
     restore_env
     save_env
 
-    pushd 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build'
+    pushd 'C:\Program Files\Microsoft Visual Studio\2022\Preview\VC\Auxiliary\Build'
 
     $bits = if ($arch -eq 'x86') { 32 } else { 64 }
 
@@ -105,7 +105,8 @@ if ((-not $force_build) -and `
 
 git pull --rebase
 
-:arch foreach ($arch in 'x64', 'x86', 'arm64') {
+#:arch foreach ($arch in 'x64', 'x86', 'arm64') {
+:arch foreach ($arch in 'x64', 'x86') {
     foreach ($build in 'Release', 'Debug') {
 	if (test-path "build-$arch-$build") {
 	    ri -r -fo "build-$arch-$build"
