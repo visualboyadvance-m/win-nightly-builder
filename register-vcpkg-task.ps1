@@ -1,3 +1,5 @@
+$erroractionpreference = 'stop'
+
 $taskname = 'VBAM vcpkg Daily Upgrade'
 $runat    = '11:00'
 

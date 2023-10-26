@@ -1,3 +1,5 @@
+$erroractionpreference = 'stop'
+
 $taskname = 'VBAM Nightly'
 $runat    = '23:00'
 

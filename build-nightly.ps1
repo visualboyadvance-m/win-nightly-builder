@@ -1,3 +1,5 @@
+$erroractionpreference = 'stop'
+
 [System.Globalization.CultureInfo]::CurrentCulture = 'en-US'
 
 [Console]::OutputEncoding = [Console]::InputEncoding = `
@@ -8,7 +10,7 @@ $env:VCPKG_ROOT     = '/source/repos/vcpkg'
 $env:VBAM_NO_PAUSE  = 1
 
 $repo_path = '/source/repos/visualboyadvance-m-nightly'
-$stage_dir = '/windows/temp/vbam-nightly-build'
+$stage_dir = $env:TEMP + '/vbam-nightly-build'
 
 $saved_env = [ordered]@{}
 
