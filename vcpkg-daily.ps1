@@ -39,17 +39,15 @@ foreach($triplet in $triplets) {
 	mkdir $triplet -ea ignore | out-null
 	pushd $triplet
 	vcpkg list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
-		vcpkg-mkpkg "${_}:$triplet"
+	    vcpkg-mkpkg "${_}:$triplet"
 	}
 	popd
 }
 
 foreach($triplet in $triplets) {
 	pushd $triplet
-	gci -n | %{
-		("put {0} {1} `n chmod 664 {1}" -f $_,"vcpkg/$triplet/$_") `
-			| sftp sftpuser@posixsh.org:nightly.vba-m.com/
-	}
+	(gci -n *.zip | %{ ("put {0} {1} `n chmod 664 {1}" -f $_,"vcpkg/$triplet/$_") ` }) `
+	    | sftp sftpuser@posixsh.org:nightly.vba-m.com/
 	popd
 }
 
