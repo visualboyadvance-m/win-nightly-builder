@@ -1,17 +1,28 @@
-import-module -force '/source/repos/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1'
+$root = if ($iswindows) { '' } else { $env:HOME }
+
+import-module -force "$root/source/repos/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 
 $erroractionpreference = 'stop'
 
 [System.Globalization.CultureInfo]::CurrentCulture = 'en-US'
 
 [Console]::OutputEncoding = [Console]::InputEncoding = `
-    $OutputEncoding = new-object System.Text.UTF8Encoding
+	$OutputEncoding = new-object System.Text.UTF8Encoding
 
-$triplets        = 'x64-windows-static','x86-windows-static','arm64-windows-static'
-$stage_dir       = $env:TEMP + '/vbam-daily-packages'
+$triplets = if ($iswindows) { 'x64-windows-static','x86-windows-static','arm64-windows-static' } `
+			elseif ($islinux) { 'x64-linux' }
 
-$env:VCPKG_ROOT  = '/source/repos/vcpkg'
-$env:PATH       += ';' + (resolve-path '/program files/git/cmd') + ';' + $env:VCPKG_ROOT
+if ($islinux) { $env:TEMP = '/tmp' }
+
+$stage_dir 		= "$env:TEMP/vbam-daily-packages"
+$env:VCPKG_ROOT = "$root/source/repos/vcpkg"
+
+if ($iswindows) {
+	$env:PATH += ';' + (resolve-path '/program files/git/cmd') + ';' + $env:VCPKG_ROOT
+}
+else {
+	$env:PATH += ':' + $env:VCPKG_ROOT
+}
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
@@ -21,9 +32,16 @@ pushd $env:VCPKG_ROOT
 
 git pull --rebase
 
-./bootstrap-vcpkg.bat
+if ($iswindows) {
+	./bootstrap-vcpkg.bat
+	$vcpkg='./vcpkg.exe'
+}
+else {
+	./bootstrap-vcpkg.sh
+	$vcpkg='./vcpkg'
+}
 
-./vcpkg.exe upgrade --no-dry-run
+&$vcpkg upgrade --no-dry-run
 
 popd
 
@@ -36,7 +54,7 @@ mkdir $stage_dir | out-null
 pushd $stage_dir
 
 foreach($triplet in $triplets) {
-	mkdir $triplet -ea ignore | out-null
+	ni -it dir $triplet -ea ignore | out-null
 	pushd $triplet
 	vcpkg list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
 	    vcpkg-mkpkg "${_}:$triplet"
