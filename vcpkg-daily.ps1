@@ -9,7 +9,7 @@ $erroractionpreference = 'stop'
 [Console]::OutputEncoding = [Console]::InputEncoding = `
 	$OutputEncoding = new-object System.Text.UTF8Encoding
 
-$triplets = if ($iswindows) { 'x64-windows-static','x86-windows-static','arm64-windows-static' } `
+$triplets = if ($iswindows) { 'x64-windows-static','x64-windows','x86-windows-static','x86-windows','arm64-windows-static','arm64-windows' } `
 			elseif ($islinux) { 'x64-linux' }
 
 if ($islinux) { $env:TEMP = '/tmp' }
