@@ -1,7 +1,7 @@
 $erroractionpreference = 'stop'
 
 $taskname = 'VBAM vcpkg Daily Upgrade'
-$runat    = '11:00'
+$runat    = '21:00'
 
 $trigger = new-scheduledtasktrigger -at $runat -daily
 
