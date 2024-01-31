@@ -169,7 +169,7 @@ popd
 
 pushd $stage_dir
 
-gci -n | %{ ("put {0}`nchmod 664 {0}" -f $_) | sftp sftpuser@posixsh.org:nightly.vba-m.com/ }
+gci -n | %{ ("put {0}`nchmod 664 {0}" -f $_) | sftp sftpuser@posixsh.org:nightly.visualboyadvance-m.org/ }
 
 popd
 

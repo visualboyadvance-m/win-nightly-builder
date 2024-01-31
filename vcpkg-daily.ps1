@@ -65,7 +65,7 @@ foreach($triplet in $triplets) {
 foreach($triplet in $triplets) {
 	pushd $triplet
 	("rm vcpkg/$triplet/*",(gci -n *.zip | %{ ("put {0} {1} `n chmod 664 {1}" -f $_,"vcpkg/$triplet/$_") ` })) `
-	    | sftp sftpuser@posixsh.org:nightly.vba-m.com/
+	    | sftp sftpuser@posixsh.org:nightly.visualboyadvance-m.org/
 	popd
 }
 
