@@ -36,7 +36,7 @@ function load_vs_env($arch) {
     restore_env
     save_env
 
-    pushd 'C:\Program Files\Microsoft Visual Studio\2022\Preview\VC\Auxiliary\Build'
+    pushd 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build'
 
     $bits = if ($arch -eq 'x86') { 32 } else { 64 }
 
@@ -46,7 +46,7 @@ function load_vs_env($arch) {
 	"vcvars${bits}"
     }
 
-    cmd /c "${bat}.bat & set" | where { $_ -match '=' } | %{
+    cmd /c "${bat}.bat & set" | where { $_ -match '=' -and $_ -notmatch 'VCPKG_ROOT=' } | %{
         $var,$val = $_.split('=')
 
         set-item -fo "env:$var" -val $val
