@@ -14,14 +14,14 @@ $triplets = if ($iswindows) { 'x64-windows-static','x64-windows','x86-windows-st
 
 if ($islinux) { $env:TEMP = '/tmp' }
 
-$stage_dir 		= "$env:TEMP/vbam-daily-packages"
+$stage_dir 	= "$env:TEMP/vbam-daily-packages"
 $env:VCPKG_ROOT = "$root/source/repos/vcpkg"
 
 if ($iswindows) {
-	$env:PATH += ';' + (resolve-path '/program files/git/cmd') + ';' + $env:VCPKG_ROOT
+	$env:PATH = $env:VCPKG_ROOT + ';' + (resolve-path '/program files/git/cmd') + ';' + $env:PATH
 }
 else {
-	$env:PATH += ':' + $env:VCPKG_ROOT
+	$env:PATH = $env:VCPKG_ROOT + ':' + $env:PATH
 }
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
