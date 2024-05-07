@@ -7,7 +7,7 @@ $erroractionpreference = 'stop'
 
 $env:PATH          += ';' + (resolve-path '/program files/git/cmd') + ';' + (resolve-path '/program files/osslsigncode')
 $env:VCPKG_ROOT     = '/source/repos/vcpkg'
-$env:VBAM_NO_PAUSE  = 1
+$env:MSYSTEM        = 'MINGW32'
 
 $repo_path = '/source/repos/visualboyadvance-m-nightly'
 $stage_dir = $env:TEMP + '/vbam-nightly-build'
@@ -53,6 +53,14 @@ function load_vs_env($arch) {
     }
 
     popd
+}
+
+function msys2_path($path) {
+    ($path -replace '^([A-Za-z]):', '/$1') -replace '\\', '/'
+}
+
+function build_mingw($build) {
+    /msys64/usr/bin/bash -l ((msys2_path $psscriptroot) + '/build-mingw.sh') ('/c' + $repo_path) $build
 }
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
@@ -108,12 +116,19 @@ if ((-not $force_build) -and `
 git pull --rebase
 
 :arch foreach ($arch in 'x64', 'x86', 'arm64') {
-    foreach ($build in 'Release', 'Debug') {
+    :build foreach ($build in 'Release', 'Debug') {
 	if (test-path "build-$arch-$build") {
 	    ri -r -fo "build-$arch-$build"
 	}
 
 	mkdir "build-$arch-$build" | out-null
+
+	if ($arch -eq 'x86') {
+	    build_mingw $build
+	    if (-not $?) { throw 'mingw build failed'; popd; return }
+	    git reset --hard HEAD
+	    continue build
+	}
 
 	load_vs_env $arch
 
