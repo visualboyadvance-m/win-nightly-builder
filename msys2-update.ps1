@@ -1,0 +1,5 @@
+/msys64/usr/bin/bash -lc 'pacman -Syu --noconfirm'
+/msys64/usr/bin/bash -lc 'pacman -Syu --noconfirm'
+/msys64/usr/bin/bash -lc 'pacman -Syu --noconfirm'
+/msys64/usr/bin/bash -lc 'pacman -Syu --noconfirm'
+/msys64/usr/bin/bash -lc 'pacman -Syu --noconfirm'
