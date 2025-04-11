@@ -30,16 +30,48 @@ $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
 pushd $env:VCPKG_ROOT
 
-git pull --rebase
-
 if ($iswindows) {
-    ./bootstrap-vcpkg.bat
-    $vcpkg='./vcpkg.exe'
+    .\bootstrap-vcpkg.bat
+    $vcpkg=$env:VCPKG_ROOT + '\vcpkg.exe'
 }
 else {
     ./bootstrap-vcpkg.sh
-    $vcpkg='./vcpkg'
+    $vcpkg=$env:VCPKG_ROOT + '/vcpkg'
 }
+
+pushd $env:VCPKG_OVERLAY_PORTS
+
+$temp_dir = "$env:TEMP/wx-port-temp"
+ri -r -fo $temp_dir -ea ignore
+ni -it dir $temp_dir -ea ignore | out-null
+
+pushd $temp_dir
+
+curl -LO https://github.com/wxWidgets/wxWidgets/archive/master.tar.gz
+
+$new_wx_hash = (get-filehash -a sha512 master.tar.gz).hash.tolower()
+
+popd
+
+#if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
+    @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
+
+    @(gc .\wxwidgets\vcpkg.json) | %{
+        if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)')
+            { $matches.1 + $matches.2 + '-' + ([convert]::toint32($matches.3) + 1) + $matches.4 }
+        else { $_ } } | set-content wxwidgets/vcpkg.json
+
+    foreach($triplet in $triplets) {
+        &$vcpkg --triplet $triplet install wxwidgets
+    }
+#    git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
+
+#    git push -f
+#}
+
+ri -r -fo $temp_dir
+
+popd
 
 foreach($triplet in $triplets) {
     &$vcpkg --triplet $triplet upgrade --no-dry-run
@@ -51,7 +83,7 @@ popd
 
 ri -r -fo $stage_dir -ea ignore
 
-mkdir $stage_dir | out-null
+ni -it dir $stage_dir -ea ignore | out-null
 
 pushd $stage_dir
 
