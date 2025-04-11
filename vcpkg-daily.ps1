@@ -9,6 +9,12 @@ $erroractionpreference = 'stop'
 [Console]::OutputEncoding = [Console]::InputEncoding = `
     $OutputEncoding = new-object System.Text.UTF8Encoding
 
+$env:PATH               += ';' + (resolve-path '/program files/git/cmd') + ';' + (resolve-path '/program files/osslsigncode')
+$env:VCPKG_ROOT          = "$root/source/repos/vcpkg"
+$env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay-ports"
+
+. $profile
+
 $triplets = if ($iswindows) { 'x64-windows-static','x64-windows','x86-windows-static','x86-windows','arm64-windows-static','arm64-windows' } `
             elseif ($islinux) { 'x64-linux' }
 

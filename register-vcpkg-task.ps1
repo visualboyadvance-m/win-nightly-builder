@@ -1,7 +1,7 @@
 $erroractionpreference = 'stop'
 
 $taskname = 'VBAM vcpkg Daily Upgrade'
-$runat    = '21:00'
+$runat    = '22:22'
 
 $trigger = new-scheduledtasktrigger -at $runat -daily
 
@@ -9,7 +9,7 @@ if (-not (test-path /logs)) { mkdir /logs }
 
 $action  = new-scheduledtaskaction `
     -execute 'pwsh' `
-    -argument ("-noprofile -executionpolicy remotesigned " + `
+    -argument ("-executionpolicy remotesigned " + `
 	"-command ""& '$(join-path $psscriptroot vcpkg-daily.ps1)'""" + `
 	" *>> /logs/vcpkg-daily.log")
 
