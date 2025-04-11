@@ -53,7 +53,7 @@ $new_wx_hash = (get-filehash -a sha512 master.tar.gz).hash.tolower()
 
 popd
 
-#if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
+if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
     @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
 
     @(gc .\wxwidgets\vcpkg.json) | %{
@@ -64,10 +64,10 @@ popd
     foreach($triplet in $triplets) {
         &$vcpkg --triplet $triplet install wxwidgets
     }
-#    git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
+    git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
 
-#    git push -f
-#}
+    git push -f
+}
 
 ri -r -fo $temp_dir
 
