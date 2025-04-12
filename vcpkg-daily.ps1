@@ -68,6 +68,7 @@ if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
         else { $_ } } | set-content wxwidgets/vcpkg.json
 
     foreach($triplet in $triplets) {
+        &$vcpkg --triplet $triplet upgrade wxwidgets --no-dry-run
         &$vcpkg --triplet $triplet install wxwidgets
     }
     git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
