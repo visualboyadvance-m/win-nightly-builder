@@ -49,6 +49,8 @@ else {
 
 pushd $env:VCPKG_OVERLAY_PORTS
 
+git pull --rebase
+
 $temp_dir = "$env:TEMP/wx-port-temp"
 ri -r -fo $temp_dir -ea ignore
 ni -it dir $temp_dir -ea ignore | out-null
