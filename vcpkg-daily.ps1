@@ -9,7 +9,7 @@ $erroractionpreference = 'stop'
 [Console]::OutputEncoding = [Console]::InputEncoding = `
     $OutputEncoding = new-object System.Text.UTF8Encoding
 
-$env:PATH               += ';' + (resolve-path '/program files/git/cmd') + ';' + (resolve-path '/program files/osslsigncode')
+$env:PATH               += ';' + (resolve-path '/program files/git/cmd')
 $env:VCPKG_ROOT          = "$root/source/repos/vcpkg"
 $env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay-ports"
 
@@ -68,8 +68,16 @@ if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
         else { $_ } } | set-content wxwidgets/vcpkg.json
 
     foreach($triplet in $triplets) {
+        $saved_overlay = $env:VCPKG_OVERLAY_PORTS
+
+        if ($triplet -match '^arm64-windows') {
+            ri env:VCPKG_OVERLAY_PORTS
+        }
+
         &$vcpkg --triplet $triplet upgrade wxwidgets --no-dry-run
         &$vcpkg --triplet $triplet install wxwidgets
+
+        $env:VCPKG_OVERLAY_PORTS = $saved_overlay
     }
     git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
 
@@ -81,7 +89,15 @@ ri -r -fo $temp_dir
 popd
 
 foreach($triplet in $triplets) {
+    $saved_overlay = $env:VCPKG_OVERLAY_PORTS
+
+    if ($triplet -match '^arm64-windows') {
+        ri env:VCPKG_OVERLAY_PORTS
+    }
+
     &$vcpkg --triplet $triplet upgrade --no-dry-run
+
+    $env:VCPKG_OVERLAY_PORTS = $saved_overlay
 }
 
 popd
