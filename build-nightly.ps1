@@ -142,7 +142,7 @@ git pull --rebase
 	    { 'TRUE' } else { 'FALSE' };
 
 	try {
-	    cmake .. -DVCPKG_TARGET_TRIPLET="${arch}-windows-static" -DCMAKE_BUILD_TYPE="$build" -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="${translations_only_str}" -G Ninja
+	    cmake .. -DVCPKG_TARGET_TRIPLET="${arch}-windows-static" -DCMAKE_BUILD_TYPE="$build" -DENABLE_FAUDIO=TRUE -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="${translations_only_str}" -G Ninja
 
 	    if (-not (test-path build.ninja)) { throw 'cmake failed' }
 
