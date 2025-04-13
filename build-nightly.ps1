@@ -9,6 +9,8 @@ $env:PATH          += ';' + (resolve-path '/program files/git/cmd') + ';' + (res
 $env:VCPKG_ROOT     = '/source/repos/vcpkg'
 $env:MSYSTEM        = 'MINGW32'
 
+. $profile
+
 $repo_path = '/source/repos/visualboyadvance-m-nightly'
 $stage_dir = $env:TEMP + '/vbam-nightly-build'
 

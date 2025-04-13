@@ -1,3 +1,5 @@
+. $profile
+
 $erroractionpreference = 'stop'
 
 $ports = write pkgconf zlib pthreads 'sdl2[samplerate]' gettext wxwidgets openal-soft nanosvg sfml ffmpeg
