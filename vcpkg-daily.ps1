@@ -30,6 +30,8 @@ else {
     $env:PATH = $env:VCPKG_ROOT + ':' + $env:PATH
 }
 
+$ports = write pkgconf zlib pthreads 'sdl2[samplerate]' gettext openal-soft nanosvg sfml ffmpeg
+
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
 "INFO: vcpkg packages upgrade started on $(date)."
@@ -95,7 +97,7 @@ foreach($triplet in $triplets) {
         ri env:VCPKG_OVERLAY_PORTS
     }
 
-    &$vcpkg --triplet $triplet upgrade --no-dry-run
+    &$vcpkg --triplet $triplet upgrade @($ports -replace '\[[^\]]+\]','') --no-dry-run
 
     $env:VCPKG_OVERLAY_PORTS = $saved_overlay
 }
