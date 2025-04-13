@@ -61,13 +61,23 @@ $new_wx_hash = (get-filehash -a sha512 master.tar.gz).hash.tolower()
 
 popd
 
+ri -r -fo $temp_dir
+
 if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
     @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
+    
+    $wx_master_ver = (
+        iwr https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
+        sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
+    ).matches.groups[1].value
 
     @(gc .\wxwidgets\vcpkg.json) | %{
-        if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)')
-            { $matches.1 + $matches.2 + '-' + ([convert]::toint32($matches.3) + 1) + $matches.4 }
-        else { $_ } } | set-content wxwidgets/vcpkg.json
+        $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
+            $matches.1 + $wx_master_ver + '-' +
+            $(if ($matches.2 -ne $wx_master_ver) { 1 } `
+              else { [convert]::toint32($matches.3) + 1 }) +
+            $matches.4 } `
+        else { $_ }) } | set-content wxwidgets/vcpkg.json
 
     foreach($triplet in $triplets) {
         $saved_overlay = $env:VCPKG_OVERLAY_PORTS
@@ -85,8 +95,6 @@ if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
 
     git push -f
 }
-
-ri -r -fo $temp_dir
 
 popd
 
