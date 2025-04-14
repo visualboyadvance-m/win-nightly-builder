@@ -1,4 +1,4 @@
-$root = if ($iswindows) { '' } else { $env:HOME }
+$root = if ($iswindows) { if ((hostname) -eq 'winbuilder') { '' } else { $env:USERPROFILE } } else { $env:HOME }
 
 import-module -force "$root/source/repos/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 
@@ -65,21 +65,28 @@ popd
 
 ri -r -fo $temp_dir
 
-if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
-    @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
-    
-    $wx_master_ver = (
-        iwr https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
-        sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
-    ).matches.groups[1].value
+$current_wx_ver = vcpkg list | sls 'wxwidgets:x64-windows-static\s+(\S+)' | %{ if ($_) { $_.matches.groups[1].value } else { 0 } }
+$port_wx_ver    = (@(gc wxwidgets/vcpkg.json) | sls '"version": "([^"]+)"').matches.groups[1].value
 
-    @(gc .\wxwidgets\vcpkg.json) | %{
-        $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
-            $matches.1 + $wx_master_ver + '-' +
-            $(if ($matches.2 -ne $wx_master_ver) { 1 } `
-              else { [convert]::toint32($matches.3) + 1 }) +
-            $matches.4 } `
-        else { $_ }) } | set-content wxwidgets/vcpkg.json
+$hash_changed   = -not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)
+
+if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
+    if ($hash_changed) {
+        @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
+
+        $wx_master_ver = (
+            iwr https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
+            sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
+        ).matches.groups[1].value
+
+        @(gc .\wxwidgets\vcpkg.json) | %{
+            $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
+                $matches.1 + $wx_master_ver + '-' +
+                $(if ($matches.2 -ne $wx_master_ver) { 1 } `
+                  else { [convert]::toint32($matches.3) + 1 }) +
+                $matches.4 } `
+            else { $_ }) } | set-content wxwidgets/vcpkg.json
+    }
 
     foreach($triplet in $triplets) {
         $saved_overlay = $env:VCPKG_OVERLAY_PORTS
