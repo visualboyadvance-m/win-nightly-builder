@@ -1,4 +1,4 @@
-$root = if ($iswindows) { if ((hostname) -eq 'winbuilder') { '' } else { $env:USERPROFILE } } else { $env:HOME }
+$root = if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME }
 
 import-module -force "$root/source/repos/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 
