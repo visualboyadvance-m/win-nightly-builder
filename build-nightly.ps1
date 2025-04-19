@@ -5,7 +5,7 @@ $erroractionpreference = 'stop'
 [Console]::OutputEncoding = [Console]::InputEncoding = `
     $OutputEncoding = new-object System.Text.UTF8Encoding
 
-$env:PATH          += ';' + (resolve-path '/program files/git/cmd') + ';' + (resolve-path '/program files/osslsigncode')
+$env:PATH          += ';' + (resolve-path '/program files/git/cmd')
 $env:VCPKG_ROOT     = '/source/repos/vcpkg'
 $env:MSYSTEM        = 'MINGW32'
 
@@ -38,20 +38,18 @@ function load_vs_env($arch) {
     restore_env
     save_env
 
-    pushd 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build'
+    pushd '/program files/microsoft visual studio/2022/community/vc/auxiliary/build'
 
-    $bits = if ($arch -eq 'x86') { 32 } else { 64 }
+    $vs_path = '/program files/microsoft visual studio/2022/community/common7/tools'
 
-    $bat = if ($arch -eq 'arm64') {
-	'vcvarsamd64_arm64'
-    } else {
-	"vcvars${bits}"
-    }
+    $arch = if ($arch -eq 'x64') { 'amd64' } else { $arch }
 
-    cmd /c "${bat}.bat & set" | where { $_ -match '=' -and $_ -notmatch 'VCPKG_ROOT=' } | %{
-        $var,$val = $_.split('=')
+    $saved_vcpkg_root = $env:VCPKG_ROOT
 
-        set-item -fo "env:$var" -val $val
+    & $vs_path/launch-vsdevshell.ps1 -hostarch amd64 -arch $arch -skipautomaticlocation
+
+    if ($saved_vcpkg_root) {
+	$env:VCPKG_ROOT = $saved_vcpkg_root
     }
 
     popd
@@ -78,6 +76,13 @@ if (-not (test-path $repo_path)) {
 
     $force_build = $true
 }
+
+pushd $env:VCPKG_ROOT
+
+git pull --rebase
+& ./bootstrap-vcpkg.bat
+
+popd
 
 pushd $repo_path
 
@@ -142,7 +147,10 @@ git pull --rebase
 	    { 'TRUE' } else { 'FALSE' };
 
 	try {
-	    cmake .. -DVCPKG_TARGET_TRIPLET="${arch}-windows-static" -DCMAKE_BUILD_TYPE="$build" -DENABLE_FAUDIO=TRUE -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="${translations_only_str}" -G Ninja
+#	    foreach ($suffix in '-static', '') {
+	    foreach ($suffix in '-static') {
+		cmake .. -DVCPKG_TARGET_TRIPLET="${arch}-windows${suffix}" -DCMAKE_BUILD_TYPE="$build" -DENABLE_FAUDIO=TRUE -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="${translations_only_str}" -G Ninja
+	    }
 
 	    if (-not (test-path build.ninja)) { throw 'cmake failed' }
 
