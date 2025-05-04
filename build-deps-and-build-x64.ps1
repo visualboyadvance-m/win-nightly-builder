@@ -2,7 +2,7 @@
 
 $erroractionpreference = 'stop'
 
-$ports = write pkgconf zlib pthreads 'sdl2[samplerate]' gettext wxwidgets openal-soft nanosvg sfml ffmpeg faudio
+$ports = write pkgconf zlib pthreads 'sdl3[samplerate]' gettext wxwidgets openal-soft nanosvg sfml ffmpeg faudio
 
 $base_triplet = 'x64-windows'
 
