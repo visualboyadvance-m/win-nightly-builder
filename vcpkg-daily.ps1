@@ -30,7 +30,7 @@ else {
     $env:PATH = $env:VCPKG_ROOT + ':' + $env:PATH
 }
 
-$ports = write pkgconf zlib pthreads 'sdl3[samplerate]' gettext openal-soft nanosvg sfml ffmpeg faudio
+$ports = write pkgconf zlib pthreads sdl3 gettext openal-soft nanosvg sfml ffmpeg faudio
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
