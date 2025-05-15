@@ -89,16 +89,8 @@ if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
     }
 
     foreach($triplet in $triplets) {
-        $saved_overlay = $env:VCPKG_OVERLAY_PORTS
-
-        if ($triplet -match '^arm64-windows') {
-            ri env:VCPKG_OVERLAY_PORTS
-        }
-
         &$vcpkg --triplet $triplet upgrade wxwidgets --no-dry-run
         &$vcpkg --triplet $triplet install wxwidgets
-
-        $env:VCPKG_OVERLAY_PORTS = $saved_overlay
     }
     git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
 
@@ -108,15 +100,7 @@ if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
 popd
 
 foreach($triplet in $triplets) {
-    $saved_overlay = $env:VCPKG_OVERLAY_PORTS
-
-    if ($triplet -match '^arm64-windows') {
-        ri env:VCPKG_OVERLAY_PORTS
-    }
-
     &$vcpkg --triplet $triplet upgrade @($ports -replace '\[[^\]]+\]','') --no-dry-run
-
-    $env:VCPKG_OVERLAY_PORTS = $saved_overlay
 }
 
 popd
