@@ -30,7 +30,7 @@ else {
     $env:PATH = $env:VCPKG_ROOT + ':' + $env:PATH
 }
 
-$ports = write pkgconf zlib pthreads sdl3 gettext openal-soft nanosvg sfml ffmpeg faudio
+$ports = write pkgconf zlib pthreads sdl3 gettext openal-soft nanosvg sfml ffmpeg faudio wxwidgets
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
@@ -88,10 +88,6 @@ if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
             else { $_ }) } | set-content wxwidgets/vcpkg.json
     }
 
-    foreach($triplet in $triplets) {
-        &$vcpkg --triplet $triplet upgrade wxwidgets --no-dry-run
-        &$vcpkg --triplet $triplet install wxwidgets
-    }
     git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
 
     git push -f
@@ -99,8 +95,11 @@ if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
 
 popd
 
-foreach($triplet in $triplets) {
-    &$vcpkg --triplet $triplet upgrade @($ports -replace '\[[^\]]+\]','') --no-dry-run
+foreach($port in $ports) {
+    foreach($triplet in $triplets) {
+        &$vcpkg --triplet $triplet install $port
+        &$vcpkg --triplet $triplet upgrade ($port -replace '\[[^\]]+\]','') --no-dry-run
+    }
 }
 
 popd
