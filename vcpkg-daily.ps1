@@ -15,7 +15,7 @@ $env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay-ports"
 
 . $profile
 
-$triplets = if ($iswindows) { 'x64-windows-static','x64-windows','x86-windows-static','x86-windows','arm64-windows-static','arm64-windows' } `
+$triplets = if ($iswindows) { 'x64-windows-static','x64-windows','x86-mingw-static','x86-windows-static','x86-windows','arm64-windows-static','arm64-windows' } `
             elseif ($islinux) { 'x64-linux' }
 
 if ($islinux) { $env:TEMP = '/tmp' }

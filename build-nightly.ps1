@@ -55,14 +55,6 @@ function load_vs_env($arch) {
     popd
 }
 
-function msys2_path($path) {
-    ($path -replace '^([A-Za-z]):', '/$1') -replace '\\', '/'
-}
-
-function build_mingw($build) {
-    /msys64/usr/bin/bash -l ((msys2_path $psscriptroot) + '/build-mingw.sh') ('/c' + $repo_path) $build
-}
-
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
 if (-not (test-path $repo_path)) {
@@ -123,7 +115,7 @@ if ((-not $force_build) -and `
 git pull --rebase
 
 #:arch foreach ($arch in 'x64', 'x86', 'arm64') {
-:arch foreach ($arch in 'x64') {
+:arch foreach ($arch in 'x64', 'x86') {
     :build foreach ($build in 'Release', 'Debug') {
 	if (test-path "build-$arch-$build") {
 	    ri -r -fo "build-$arch-$build"
@@ -132,13 +124,14 @@ git pull --rebase
 	mkdir "build-$arch-$build" | out-null
 
 	if ($arch -eq 'x86') {
-	    build_mingw $build
-	    if (-not $?) { throw 'mingw build failed'; popd; return }
-	    git reset --hard HEAD
-	    continue build
+	    $triplet = "${arch}-mingw-static"
+	    save_env
+	    $env:PATH = 'C:/msys64/mingw32/bin;' + $env:PATH
 	}
-
-	load_vs_env $arch
+	else {
+	    $triplet = "${arch}-windows-static"
+	    load_vs_env $arch
+	}
 
 	pushd "build-$arch-$build"
 
@@ -148,10 +141,7 @@ git pull --rebase
 	    { 'TRUE' } else { 'FALSE' };
 
 	try {
-#	    foreach ($suffix in '-static', '') {
-	    foreach ($suffix in '-static') {
-		cmake .. -DVCPKG_TARGET_TRIPLET="${arch}-windows${suffix}" -DCMAKE_BUILD_TYPE="$build" -DENABLE_FAUDIO=TRUE -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="${translations_only_str}" -G Ninja
-	    }
+	    cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE="$build" -DENABLE_FAUDIO=TRUE -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="${translations_only_str}" -G Ninja
 
 	    if (-not (test-path build.ninja)) { throw 'cmake failed' }
 
