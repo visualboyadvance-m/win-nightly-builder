@@ -30,7 +30,11 @@ else {
     $env:PATH = $env:VCPKG_ROOT + ':' + $env:PATH
 }
 
-$ports = write pkgconf zlib pthreads sdl3 gettext openal-soft nanosvg sfml ffmpeg faudio wxwidgets
+$ports = @{}
+
+foreach($triplet in $triplets) {
+    $ports[$triplet] = write pkgconf zlib pthreads sdl3 gettext openal-soft nanosvg sfml ffmpeg faudio wxwidgets
+}
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
@@ -95,10 +99,17 @@ if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
 
 popd
 
-foreach($port in $ports) {
-    foreach($triplet in $triplets) {
+foreach($triplet in $triplets) {
+    foreach($port in $ports[$triplet]) {
+        $saved_PATH = $env:PATH
+        if ($triplet -eq 'x86-mingw-static') {
+            $env:PATH = 'C:/msys64/mingw32/bin;' + $env:PATH
+        }
+
         &$vcpkg --triplet $triplet install $port
         &$vcpkg --triplet $triplet upgrade ($port -replace '\[[^\]]+\]','') --no-dry-run
+
+        $env:PATH = $saved_PATH
     }
 }
 
