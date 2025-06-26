@@ -15,8 +15,9 @@ $env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay-ports"
 
 . $profile
 
-$triplets = if ($iswindows) { 'x64-windows-static','x64-windows','x86-mingw-static','x86-windows-static','x86-windows','arm64-windows-static','arm64-windows' } `
-            elseif ($islinux) { 'x64-linux' }
+$triplets = 'x64-windows-static','x64-windows'
+#$triplets = if ($iswindows) { 'x64-windows-static','x64-windows','x86-mingw-static','x86-windows-static','x86-windows','arm64-windows-static','arm64-windows' } `
+#            elseif ($islinux) { 'x64-linux' }
 
 if ($islinux) { $env:TEMP = '/tmp' }
 
@@ -33,7 +34,7 @@ else {
 $ports = @{}
 
 foreach($triplet in $triplets) {
-    $ports[$triplet] = write pkgconf zlib pthreads sdl3 gettext openal-soft nanosvg sfml ffmpeg faudio wxwidgets
+    $ports[$triplet] = write pkgconf zlib pthreads sdl3 'gettext[tools]' wxwidgets openal-soft nanosvg sfml 'ffmpeg[x264,x265]' faudio
 }
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
