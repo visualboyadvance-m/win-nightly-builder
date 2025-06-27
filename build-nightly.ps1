@@ -114,8 +114,7 @@ if ((-not $force_build) -and `
 
 git pull --rebase
 
-#:arch foreach ($arch in 'x64', 'x86', 'arm64') {
-:arch foreach ($arch in 'x64', 'x86') {
+:arch foreach ($arch in 'x64', 'x86', 'arm64') {
     :build foreach ($build in 'Release', 'Debug') {
 	if (test-path "build-$arch-$build") {
 	    ri -r -fo "build-$arch-$build"
