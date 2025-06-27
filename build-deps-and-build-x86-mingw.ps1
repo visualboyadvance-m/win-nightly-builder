@@ -6,7 +6,8 @@ $ports = write pkgconf zlib pthreads sdl3 'gettext[tools]' wxwidgets openal-soft
 
 $triplet = 'x86-mingw-static'
 
-$env:PATH = 'c:/msys64/mingw32/bin;' + $env:PATH
+$orig_path = $env:PATH
+$env:PATH  = 'c:/msys64/mingw32/bin;' + $env:PATH
 
 vcpkg --triplet $triplet install $ports
 vcpkg --triplet $triplet upgrade ($ports -replace '\[[^\]]+\]','') --no-dry-run
@@ -23,3 +24,5 @@ cmake .. "-DVCPKG_TARGET_TRIPLET=$triplet" -DCMAKE_BUILD_TYPE=Release -G Ninja
 ninja
 
 popd
+
+$env:PATH = $orig_path
