@@ -2,7 +2,7 @@
 
 $erroractionpreference = 'stop'
 
-$ports = write pkgconf zlib pthreads sdl3 'gettext[tools]' wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
+$ports = write pkgconf zlib pthreads 'sdl3[vulkan]' 'gettext[tools]' wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
 
 $triplet = 'x86-mingw-static'
 
