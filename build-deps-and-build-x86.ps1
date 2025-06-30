@@ -11,7 +11,7 @@ vsenv x86
 foreach($suffix in @('','-static')) {
     $triplet = "${base_triplet}${suffix}"
 
-    vcpkg --triplet $triplet install $ports
+    vcpkg --triplet $triplet install --recurse $ports
     vcpkg --triplet $triplet upgrade ($ports -replace '\[[^\]]+\]','') --no-dry-run
 
     $build_dir = join-path (convert-path ~/source/repos) visualboyadvance-m/build-$triplet

@@ -11,7 +11,7 @@ $erroractionpreference = 'stop'
 
 $env:PATH               += ';' + (resolve-path '/program files/git/cmd')
 $env:VCPKG_ROOT          = "$root/source/repos/vcpkg"
-$env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay-ports"
+$env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay"
 
 . $profile
 
@@ -99,20 +99,20 @@ if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
 
 popd
 
-#foreach($triplet in $triplets) {
-#    foreach($port in $ports[$triplet]) {
-#        $saved_PATH = $env:PATH
-#        if ($triplet -eq 'x86-mingw-static') {
-#            $env:PATH = 'C:/msys64/mingw32/bin;' + $env:PATH
-#        }
-#
-#        &$vcpkg --triplet $triplet install $port
-#        &$vcpkg --triplet $triplet upgrade ($port -replace '\[[^\]]+\]','') --no-dry-run
-#
-#        $env:PATH = $saved_PATH
-#    }
-#}
-#
+foreach($triplet in $triplets) {
+    foreach($port in $ports[$triplet]) {
+        $saved_PATH = $env:PATH
+        if ($triplet -eq 'x86-mingw-static') {
+            $env:PATH = 'C:/msys64/mingw32/bin;' + $env:PATH
+        }
+
+        &$vcpkg --triplet $triplet install --recurse $port
+        &$vcpkg --triplet $triplet upgrade ($port -replace '\[[^\]]+\]','') --no-dry-run
+
+        $env:PATH = $saved_PATH
+    }
+}
+
 popd
 
 # Generate binary packages

@@ -1,3 +1,7 @@
+$root = if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME }
+
+. $profile
+
 $erroractionpreference = 'stop'
 
 [System.Globalization.CultureInfo]::CurrentCulture = 'en-US'
@@ -6,56 +10,15 @@ $erroractionpreference = 'stop'
     $OutputEncoding = new-object System.Text.UTF8Encoding
 
 $env:PATH          += ';' + (resolve-path '/program files/git/cmd')
-$env:VCPKG_ROOT     = '/source/repos/vcpkg'
+$env:VCPKG_ROOT     = "$root/source/repos/vcpkg"
 $env:MSYSTEM        = 'MINGW32'
 
-. $profile
-
-$repo_path = '/source/repos/visualboyadvance-m-nightly'
+$repo_path = "$root/source/repos/visualboyadvance-m-nightly"
 $stage_dir = $env:TEMP + '/vbam-nightly-build'
 
 $saved_env = [ordered]@{}
 
-function save_env {
-    if (-not $saved_env.count) {
-	foreach ($var in (gci env:)) {
-	    $saved_env[$var.name] = $var.value
-	}
-    }
-}
-
-function restore_env {
-    if ($saved_env.count) {
-	ri -fo env:*
-
-	$saved_env.getenumerator() | %{
-	    set-item -fo "env:$($_.key)" -val $_.value
-	}
-    }
-}
-
-function load_vs_env($arch) {
-    restore_env
-    save_env
-
-    pushd '/program files/microsoft visual studio/2022/community/vc/auxiliary/build'
-
-    $vs_path = '/program files/microsoft visual studio/2022/community/common7/tools'
-
-    $arch = if ($arch -eq 'x64') { 'amd64' } else { $arch }
-
-    $saved_vcpkg_root = $env:VCPKG_ROOT
-
-    & $vs_path/launch-vsdevshell.ps1 -hostarch amd64 -arch $arch -skipautomaticlocation
-
-    if ($saved_vcpkg_root) {
-	$env:VCPKG_ROOT = $saved_vcpkg_root
-    }
-
-    popd
-}
-
-$force_build = if ($args[0] -match '^--?f') { $true} else { $false }
+$force_build = if ($args[0] -match '^--?f') { $true } else { $false }
 
 if (-not (test-path $repo_path)) {
     ni -it dir $repo_path | out-null
@@ -122,14 +85,15 @@ git pull --rebase
 
 	mkdir "build-$arch-$build" | out-null
 
+	$orig_path = $env:PATH
+
 	if ($arch -eq 'x86') {
-	    $triplet = "${arch}-mingw-static"
-	    save_env
-	    $env:PATH = 'C:/msys64/mingw32/bin;' + $env:PATH
+	    $triplet   = "${arch}-mingw-static"
+	    $env:PATH  = 'C:/msys64/mingw32/bin;' + $env:PATH
 	}
 	else {
 	    $triplet = "${arch}-windows-static"
-	    load_vs_env $arch
+	    vsenv $arch
 	}
 
 	pushd "build-$arch-$build"
@@ -152,7 +116,7 @@ git pull --rebase
 
 	popd
 
-	restore_env
+	$env:PATH = $orig_path
 
 	# Restore tree state in case any changes were made.
 	git reset --hard HEAD

@@ -7,9 +7,9 @@ $ports = write pkgconf zlib pthreads 'sdl3[vulkan]' 'gettext[tools]' wxwidgets o
 $triplet = 'x64-mingw-static'
 
 $orig_path = $env:PATH
-$env:PATH  = 'c:/msys64/ucrt64/bin;' + $env:PATH
+$env:PATH  = 'c:/msys64/clang64/bin;' + $env:PATH
 
-vcpkg --triplet $triplet install $ports
+vcpkg --triplet $triplet install --recurse $ports
 vcpkg --triplet $triplet upgrade ($ports -replace '\[[^\]]+\]','') --no-dry-run
 
 $build_dir = join-path (convert-path ~/source/repos) visualboyadvance-m/build-$triplet

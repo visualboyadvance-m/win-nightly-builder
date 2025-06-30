@@ -11,14 +11,14 @@ vsenv arm64
 foreach($suffix in @('','-static')) {
     $triplet = "${base_triplet}${suffix}"
 
-    vcpkg --triplet $triplet install $ports
+    vcpkg --triplet $triplet install --recurse $ports
     vcpkg --triplet $triplet upgrade ($ports -replace '\[[^\]]+\]','') --no-dry-run
 
     $saved_overlay = $env:VCPKG_OVERLAY_PORTS
 
     ri env:VCPKG_OVERLAY_PORTS -ea ignore
 
-    vcpkg --triplet $triplet install wxwidgets
+    vcpkg --triplet $triplet install --recurse wxwidgets
     vcpkg --triplet $triplet upgrade wxwidgets --no-dry-run
 
     $env:VCPKG_OVERLAY_PORTS = $saved_overlay

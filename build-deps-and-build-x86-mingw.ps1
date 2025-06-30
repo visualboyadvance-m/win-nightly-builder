@@ -9,7 +9,7 @@ $triplet = 'x86-mingw-static'
 $orig_path = $env:PATH
 $env:PATH  = 'c:/msys64/mingw32/bin;' + $env:PATH
 
-vcpkg --triplet $triplet install $ports
+vcpkg --triplet $triplet install --recurse $ports
 vcpkg --triplet $triplet upgrade ($ports -replace '\[[^\]]+\]','') --no-dry-run
 
 $build_dir = join-path (convert-path ~/source/repos) visualboyadvance-m/build-$triplet
