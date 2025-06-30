@@ -1,3 +1,5 @@
+. $profile
+
 $root = if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME }
 
 import-module -force "$root/source/repos/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
@@ -12,8 +14,7 @@ $erroractionpreference = 'stop'
 $env:PATH               += ';' + (resolve-path '/program files/git/cmd')
 $env:VCPKG_ROOT          = "$root/source/repos/vcpkg"
 $env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay"
-
-. $profile
+$env:MSYSTEM             = 'MINGW32'
 
 $triplets = if ($iswindows) { 'x64-windows-static','x64-windows','x86-mingw-static','x64-mingw-static','x86-windows-static','x86-windows','arm64-windows-static','arm64-windows' } `
             elseif ($islinux) { 'x64-linux' }
@@ -106,7 +107,7 @@ foreach($triplet in $triplets) {
             $env:PATH = 'C:/msys64/mingw32/bin;' + $env:PATH
         }
 
-        &$vcpkg --triplet $triplet install --recurse $port
+        &$vcpkg --triplet $triplet install --recurse --keep-going $port
         &$vcpkg --triplet $triplet upgrade ($port -replace '\[[^\]]+\]','') --no-dry-run
 
         $env:PATH = $saved_PATH

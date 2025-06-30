@@ -1,6 +1,6 @@
 . $profile
 
-$erroractionpreference = 'stop'
+$erroractionpreference = 'ignore'
 
 $ports = write pkgconf zlib pthreads 'sdl3[vulkan]' 'gettext[tools]' wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
 
@@ -11,7 +11,7 @@ vsenv amd64
 foreach($suffix in @('','-static')) {
     $triplet = "${base_triplet}${suffix}"
 
-    vcpkg --triplet $triplet install --recurse $ports
+    vcpkg --triplet $triplet install --recurse --keep-going $ports
     vcpkg --triplet $triplet upgrade ($ports -replace '\[[^\]]+\]','') --no-dry-run
 
     $build_dir = join-path (convert-path ~/source/repos) visualboyadvance-m/build-$triplet

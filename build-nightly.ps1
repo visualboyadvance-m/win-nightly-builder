@@ -9,9 +9,10 @@ $erroractionpreference = 'stop'
 [Console]::OutputEncoding = [Console]::InputEncoding = `
     $OutputEncoding = new-object System.Text.UTF8Encoding
 
-$env:PATH          += ';' + (resolve-path '/program files/git/cmd')
-$env:VCPKG_ROOT     = "$root/source/repos/vcpkg"
-$env:MSYSTEM        = 'MINGW32'
+$env:PATH               += ';' + (resolve-path '/program files/git/cmd')
+$env:VCPKG_ROOT          = "$root/source/repos/vcpkg"
+$env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay"
+$env:MSYSTEM             = 'MINGW32'
 
 $repo_path = "$root/source/repos/visualboyadvance-m-nightly"
 $stage_dir = $env:TEMP + '/vbam-nightly-build'
@@ -36,6 +37,12 @@ pushd $env:VCPKG_ROOT
 
 git pull --rebase
 & ./bootstrap-vcpkg.bat
+
+popd
+
+pushd $env:VCPKG_OVERLAY_PORTS
+
+git pull --rebase
 
 popd
 

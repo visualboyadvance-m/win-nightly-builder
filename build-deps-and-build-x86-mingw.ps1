@@ -1,6 +1,6 @@
 . $profile
 
-$erroractionpreference = 'stop'
+$erroractionpreference = 'ignore'
 
 $ports = write pkgconf zlib pthreads 'sdl3[vulkan]' 'gettext[tools]' wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
 
@@ -9,7 +9,7 @@ $triplet = 'x86-mingw-static'
 $orig_path = $env:PATH
 $env:PATH  = 'c:/msys64/mingw32/bin;' + $env:PATH
 
-vcpkg --triplet $triplet install --recurse $ports
+vcpkg --triplet $triplet install --recurse --keep-going $ports
 vcpkg --triplet $triplet upgrade ($ports -replace '\[[^\]]+\]','') --no-dry-run
 
 $build_dir = join-path (convert-path ~/source/repos) visualboyadvance-m/build-$triplet
