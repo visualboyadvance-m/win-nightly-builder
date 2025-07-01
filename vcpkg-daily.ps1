@@ -34,7 +34,7 @@ else {
 $ports = @{}
 
 foreach($triplet in $triplets) {
-    $ports[$triplet] = write pkgconf zlib pthreads 'sdl3[vulkan]' 'gettext[tools]' wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
+    $ports[$triplet] = write pkgconf zlib pthreads 'sdl3[vulkan]' gettext-libintl wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
 }
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }

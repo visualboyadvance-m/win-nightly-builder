@@ -2,7 +2,7 @@
 
 $erroractionpreference = 'ignore'
 
-$ports = write pkgconf zlib pthreads 'sdl3[vulkan]' 'gettext[tools]' wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
+$ports = write pkgconf zlib pthreads 'sdl3[vulkan]' gettext-libintl wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
 
 $base_triplet = 'arm64-windows'
 
