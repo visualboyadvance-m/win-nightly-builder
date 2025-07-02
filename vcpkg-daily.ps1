@@ -37,6 +37,37 @@ foreach($triplet in $triplets) {
     $ports[$triplet] = write pkgconf zlib pthreads 'sdl3[vulkan]' gettext-libintl wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
 }
 
+function setup_build_env([string]$triplet) {
+    $triplet -match '^([^-]+)'
+    $arch = $matches[1]
+
+    if ($triplet -match 'mingw') {
+	ri variable:global:orig_path -ea ignore
+
+	if ($arch -eq 'x86') {
+	    $global:orig_path = $env:PATH
+	    $env:PATH         = 'c:/msys64/mingw32/bin;' + $env:PATH
+	}
+	elseif ($arch -eq 'x64') {
+	    $global:orig_path = $env:PATH
+	    $env:PATH         = 'c:/msys64/clang64/bin;' + $env:PATH
+	}
+    }
+    else { # MSVC
+	if ($arch -eq 'x64') {
+	    $arch = 'amd64'
+	}
+
+	vsenv $arch
+    }
+}
+
+function teardown_build_env([string]$triplet) {
+    if ($global:orig_path) {
+	$env:PATH = $global:orig_path
+    }
+}
+
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
 "INFO: vcpkg packages upgrade started on $(date)."
@@ -101,17 +132,12 @@ if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
 popd
 
 foreach($triplet in $triplets) {
-    foreach($port in $ports[$triplet]) {
-        $saved_PATH = $env:PATH
-        if ($triplet -eq 'x86-mingw-static') {
-            $env:PATH = 'C:/msys64/mingw32/bin;' + $env:PATH
-        }
+    setup_build_env $triplet
 
-        &$vcpkg --triplet $triplet install --recurse --keep-going $port
-        &$vcpkg --triplet $triplet upgrade ($port -replace '\[[^\]]+\]','') --no-dry-run
+    &$vcpkg --triplet $triplet install --recurse --keep-going $ports[$triplet]
+    &$vcpkg --triplet $triplet upgrade ($ports[$triplet] -replace '\[[^\]]+\]','') --no-dry-run
 
-        $env:PATH = $saved_PATH
-    }
+    teardown_build_env $triplet
 }
 
 popd

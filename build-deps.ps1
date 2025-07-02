@@ -77,23 +77,23 @@ foreach ($triplet in $requested_build_triplets) {
 }
 
 foreach ($triplet in $build_triplets.keys) {
-	setup_build_env $triplet
+    setup_build_env $triplet
 
-	&$vcpkg --triplet $triplet install --recurse --keep-going $ports
-	&$vcpkg --triplet $triplet upgrade ($ports -replace '\[[^\]]+\]','') --no-dry-run
+    &$vcpkg --triplet $triplet install --recurse --keep-going $ports
+    &$vcpkg --triplet $triplet upgrade ($ports -replace '\[[^\]]+\]','') --no-dry-run
 
-	$build_dir = join-path (convert-path ~/source/repos) visualboyadvance-m/build-$triplet
+    $build_dir = join-path (convert-path ~/source/repos) visualboyadvance-m/build-$triplet
 
-	ni -it dir $build_dir -ea ignore | out-null
+    ni -it dir $build_dir -ea ignore | out-null
 
-	pushd $build_dir
+    pushd $build_dir
 
-	ri -r -fo *
+    ri -r -fo *
 
-	cmake .. "-DVCPKG_TARGET_TRIPLET=$triplet" -DCMAKE_BUILD_TYPE=Release -G Ninja
-	ninja
+    cmake .. "-DVCPKG_TARGET_TRIPLET=$triplet" -DCMAKE_BUILD_TYPE=Release -G Ninja
+    ninja
 
-	popd
+    popd
 
-	teardown_build_env $triplet
+    teardown_build_env $triplet
 }
