@@ -26,7 +26,7 @@ popd
 $vcpkg = join-path $env:VCPKG_ROOT vcpkg.exe
 
 function setup_build_env([string]$triplet) {
-    $triplet -match '^([^-]+)'
+    $triplet -match '^([^-]+)' | out-null
     $arch = $matches[1]
 
     if ($triplet -match 'mingw') {
