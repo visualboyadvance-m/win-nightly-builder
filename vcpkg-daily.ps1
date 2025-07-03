@@ -74,6 +74,8 @@ $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
 pushd $env:VCPKG_ROOT
 
+git pull --rebase
+
 if ($iswindows) {
     .\bootstrap-vcpkg.bat
     $vcpkg=$env:VCPKG_ROOT + '\vcpkg.exe'
