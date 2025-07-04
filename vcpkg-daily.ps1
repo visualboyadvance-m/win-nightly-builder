@@ -25,28 +25,23 @@ popd
 
 ri -r -fo $temp_dir
 
-$current_wx_ver = vcpkg-list | sls 'wxwidgets:x64-windows-static\s+(\S+)' | %{ if ($_) { $_.matches.groups[1].value } else { 0 } }
-$port_wx_ver    = (@(gc wxwidgets/vcpkg.json) | sls '"version": "([^"]+)"').matches.groups[1].value
+pushd $env:VCPKG_OVERLAY_PORTS
 
-$hash_changed   = -not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)
+if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
+    @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
 
-if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
-    if ($hash_changed) {
-        @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
+    $wx_master_ver = (
+        iwr https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
+        sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
+    ).matches.groups[1].value
 
-        $wx_master_ver = (
-            iwr https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
-            sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
-        ).matches.groups[1].value
-
-        @(gc .\wxwidgets\vcpkg.json) | %{
-            $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
-                $matches.1 + $wx_master_ver + '-' +
-                $(if ($matches.2 -ne $wx_master_ver) { 1 } `
-                  else { [convert]::toint32($matches.3) + 1 }) +
-                $matches.4 } `
-            else { $_ }) } | set-content wxwidgets/vcpkg.json
-    }
+    @(gc .\wxwidgets\vcpkg.json) | %{
+        $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
+            $matches.1 + $wx_master_ver + '-' +
+            $(if ($matches.2 -ne $wx_master_ver) { 1 } `
+              else { [convert]::toint32($matches.3) + 1 }) +
+            $matches.4 } `
+        else { $_ }) } | set-content wxwidgets/vcpkg.json
 
     git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
 
@@ -57,7 +52,9 @@ if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
     }
 }
 
-foreach($triplet in $TRIPLETS) {
+popd
+
+foreach ($triplet in $TRIPLETS) {
     setup_build_env $triplet
 
     vcpkg --triplet $triplet install --recurse --keep-going $DEP_PORTS
@@ -65,8 +62,6 @@ foreach($triplet in $TRIPLETS) {
 
     teardown_build_env $triplet
 }
-
-popd
 
 # Generate binary packages
 
@@ -76,7 +71,7 @@ ni -it dir $stage_dir -ea ignore | out-null
 
 pushd $stage_dir
 
-foreach($triplet in $TRIPLETS) {
+foreach ($triplet in $TRIPLETS) {
     ni -it dir $triplet -ea ignore | out-null
     pushd $triplet
     vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
@@ -86,7 +81,7 @@ foreach($triplet in $TRIPLETS) {
     popd
 }
 
-foreach($triplet in $TRIPLETS) {
+foreach ($triplet in $TRIPLETS) {
     pushd $triplet
     $existing_pkgs = 'ls' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/vcpkg/$triplet" 2>$null | select -skip 3 | %{ $_ -replace '^([^_]+).*', '$1' }
     gci -n *.zip | %{ 

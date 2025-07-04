@@ -107,7 +107,7 @@ function update_vcpkg {
 function setup_build_env([string]$triplet) {
     if (-not $iswindows) { return }
 
-    $triplet -match '^([^-]+)'
+    $triplet -match '^([^-]+)' | out-null
     $arch = $matches[1]
 
     if ($triplet -match 'mingw') {
@@ -134,9 +134,14 @@ function setup_build_env([string]$triplet) {
 function teardown_build_env([string]$triplet) {
     if ($global:orig_path) {
 	$env:PATH = $global:orig_path
+	ri variable:global:orig_path -ea ignore
+    }
+
+    if ($triplet -match '-windows-?') {
+	vsenv
     }
 }
 
-export-modulemember -variable REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES `
+export-modulemember -variable REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,TRIPLETS `
 		    -function update_vcpkg,setup_build_env,teardown_build_env `
 		    -alias vcpkg
