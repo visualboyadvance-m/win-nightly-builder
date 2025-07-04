@@ -1,50 +1,23 @@
-$root = if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME }
-
-. $profile
+import-module -force "$psscriptroot/vbam-builder.psm1"
 
 $erroractionpreference = 'stop'
 
-[System.Globalization.CultureInfo]::CurrentCulture = 'en-US'
-
-[Console]::OutputEncoding = [Console]::InputEncoding = `
-    $OutputEncoding = new-object System.Text.UTF8Encoding
-
-$env:PATH               += ';' + (resolve-path '/program files/git/cmd')
-$env:VCPKG_ROOT          = "$root/source/repos/vcpkg"
-$env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay"
-$env:MSYSTEM             = 'MINGW32'
-
-$repo_path = "$root/source/repos/visualboyadvance-m-nightly"
-$stage_dir = $env:TEMP + '/vbam-nightly-build'
-
-$saved_env = [ordered]@{}
+$repo_path = join-path $REPOS_ROOT visualboyadvance-m-nightly
+$stage_dir = join-path $env:TEMP   vbam-nightly-build
 
 $force_build = if ($args[0] -match '^--?f') { $true } else { $false }
 
-if (-not (test-path $repo_path)) {
-    ni -it dir $repo_path | out-null
+update_vcpkg
 
-    pushd (resolve-path "$repo_path/..")
+if (-not (test-path $repo_path -ea ignore)) {
+    pushd $REPOS_ROOT
 
-    git clone 'https://github.com/visualboyadvance-m/visualboyadvance-m.git' visualboyadvance-m-nightly
+    git clone https://github.com/visualboyadvance-m/visualboyadvance-m.git visualboyadvance-m-nightly
 
     popd
 
     $force_build = $true
 }
-
-pushd $env:VCPKG_ROOT
-
-git pull --rebase
-& ./bootstrap-vcpkg.bat
-
-popd
-
-pushd $env:VCPKG_OVERLAY_PORTS
-
-git pull --rebase
-
-popd
 
 pushd $repo_path
 
@@ -84,26 +57,16 @@ if ((-not $force_build) -and `
 
 git pull --rebase
 
-:arch foreach ($arch in 'x64', 'x86', 'arm64') {
-    :build foreach ($build in 'Release', 'Debug') {
-	if (test-path "build-$arch-$build") {
-	    ri -r -fo "build-$arch-$build"
-	}
+:triplet foreach ($triplet in $TRIPLETS) {
+    :build foreach ($build_type in 'Release', 'Debug') {
+	$build_dir = "build-$triplet-$build_type"
 
-	mkdir "build-$arch-$build" | out-null
+	ri -r -fo  $build_dir -ea ignore
+	ni -it dir $build_dir | out-null
 
-	$orig_path = $env:PATH
+	pushd $build_dir
 
-	if ($arch -eq 'x86') {
-	    $triplet   = "${arch}-mingw-static"
-	    $env:PATH  = 'C:/msys64/mingw32/bin;' + $env:PATH
-	}
-	else {
-	    $triplet = "${arch}-windows-static"
-	    vsenv $arch
-	}
-
-	pushd "build-$arch-$build"
+	setup_build_env $triplet
 
 	$error = $null
 
@@ -111,9 +74,9 @@ git pull --rebase
 	    { 'TRUE' } else { 'FALSE' };
 
 	try {
-	    cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE="$build" -DENABLE_FAUDIO=TRUE -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="${translations_only_str}" -G Ninja
+	    cmake .. -DVCPKG_TARGET_TRIPLET=$triplet -DCMAKE_BUILD_TYPE=$build_type -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY=$translations_only_str -G Ninja
 
-	    if (-not (test-path build.ninja)) { throw 'cmake failed' }
+	    if (-not (test-path build.ninja -ea ignore)) { throw 'cmake failed' }
 
 	    ninja
 
@@ -123,10 +86,7 @@ git pull --rebase
 
 	popd
 
-	$env:PATH = $orig_path
-
-	# Restore tree state in case any changes were made.
-	git reset --hard HEAD
+	teardown_build_env $triplet
 
 	if ($error) {
 	    write-error $error
@@ -135,14 +95,13 @@ git pull --rebase
 	}
 
 	if ($translations_only) {
-	    break arch
+	    break triplet
 	}
     }
 }
 
-ri -r -fo $stage_dir -ea ignore
-
-mkdir $stage_dir | out-null
+ri -r -fo  $stage_dir -ea ignore
+ni -it dir $stage_dir | out-null
 
 if (-not $translations_only) {
     cpi -fo build-*/*.zip $stage_dir

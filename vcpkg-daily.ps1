@@ -1,96 +1,18 @@
-. $profile
-
-$root = if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME }
-
-import-module -force "$root/source/repos/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
+import-module -force "$psscriptroot/vbam-builder.psm1"
+import-module -force "$REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 
 $erroractionpreference = 'stop'
 
-[System.Globalization.CultureInfo]::CurrentCulture = 'en-US'
-
-[Console]::OutputEncoding = [Console]::InputEncoding = `
-    $OutputEncoding = new-object System.Text.UTF8Encoding
-
-$env:PATH               += ';' + (resolve-path '/program files/git/cmd')
-$env:VCPKG_ROOT          = "$root/source/repos/vcpkg"
-$env:VCPKG_OVERLAY_PORTS = "$root/source/repos/vcpkg-overlay"
-$env:MSYSTEM             = 'MINGW32'
-
-$triplets = if ($iswindows) { 'x64-windows-static','x64-windows','x86-mingw-static','x64-mingw-static','x86-windows-static','x86-windows','arm64-windows-static','arm64-windows' } `
-            elseif ($islinux) { 'x64-linux' }
-
-if ($islinux) { $env:TEMP = '/tmp' }
-
-$stage_dir      = "$env:TEMP/vbam-daily-packages"
-$env:VCPKG_ROOT = "$root/source/repos/vcpkg"
-
-if ($iswindows) {
-    $env:PATH = $env:VCPKG_ROOT + ';' + (resolve-path '/program files/git/cmd') + ';' + $env:PATH
-}
-else {
-    $env:PATH = $env:VCPKG_ROOT + ':' + $env:PATH
-}
-
-$ports = @{}
-
-foreach($triplet in $triplets) {
-    $ports[$triplet] = write pkgconf zlib pthreads 'sdl3[vulkan]' gettext-libintl wxwidgets openal-soft nanosvg 'ffmpeg[x264,x265]' faudio
-}
-
-function setup_build_env([string]$triplet) {
-    $triplet -match '^([^-]+)'
-    $arch = $matches[1]
-
-    if ($triplet -match 'mingw') {
-	ri variable:global:orig_path -ea ignore
-
-	if ($arch -eq 'x86') {
-	    $global:orig_path = $env:PATH
-	    $env:PATH         = 'c:/msys64/mingw32/bin;' + $env:PATH
-	}
-	elseif ($arch -eq 'x64') {
-	    $global:orig_path = $env:PATH
-	    $env:PATH         = 'c:/msys64/clang64/bin;' + $env:PATH
-	}
-    }
-    else { # MSVC
-	if ($arch -eq 'x64') {
-	    $arch = 'amd64'
-	}
-
-	vsenv $arch
-    }
-}
-
-function teardown_build_env([string]$triplet) {
-    if ($global:orig_path) {
-	$env:PATH = $global:orig_path
-    }
-}
+$stage_dir = "$env:TEMP/vbam-daily-packages"
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
 "INFO: vcpkg packages upgrade started on $(date)."
 
-pushd $env:VCPKG_ROOT
-
-git pull --rebase
-
-if ($iswindows) {
-    .\bootstrap-vcpkg.bat
-    $vcpkg=$env:VCPKG_ROOT + '\vcpkg.exe'
-}
-else {
-    ./bootstrap-vcpkg.sh
-    $vcpkg=$env:VCPKG_ROOT + '/vcpkg'
-}
-
-pushd $env:VCPKG_OVERLAY_PORTS
-
-git pull --rebase
+update_vcpkg
 
 $temp_dir = "$env:TEMP/wx-port-temp"
-ri -r -fo $temp_dir -ea ignore
+
 ni -it dir $temp_dir -ea ignore | out-null
 
 pushd $temp_dir
@@ -103,7 +25,7 @@ popd
 
 ri -r -fo $temp_dir
 
-$current_wx_ver = vcpkg list | sls 'wxwidgets:x64-windows-static\s+(\S+)' | %{ if ($_) { $_.matches.groups[1].value } else { 0 } }
+$current_wx_ver = vcpkg-list | sls 'wxwidgets:x64-windows-static\s+(\S+)' | %{ if ($_) { $_.matches.groups[1].value } else { 0 } }
 $port_wx_ver    = (@(gc wxwidgets/vcpkg.json) | sls '"version": "([^"]+)"').matches.groups[1].value
 
 $hash_changed   = -not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)
@@ -128,16 +50,18 @@ if (($current_wx_ver -ne $port_wx_ver) -or $hash_changed) {
 
     git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
 
-    git push -f
+    git push
+
+    if (-not $?) {
+        write-error 'failed to update wxwidgets port in overlay'
+    }
 }
 
-popd
-
-foreach($triplet in $triplets) {
+foreach($triplet in $TRIPLETS) {
     setup_build_env $triplet
 
-    &$vcpkg --triplet $triplet install --recurse --keep-going $ports[$triplet]
-    &$vcpkg --triplet $triplet upgrade ($ports[$triplet] -replace '\[[^\]]+\]','') --no-dry-run
+    vcpkg --triplet $triplet install --recurse --keep-going $DEP_PORTS
+    vcpkg --triplet $triplet upgrade $DEP_PORT_NAMES --no-dry-run
 
     teardown_build_env $triplet
 }
@@ -152,17 +76,17 @@ ni -it dir $stage_dir -ea ignore | out-null
 
 pushd $stage_dir
 
-foreach($triplet in $triplets) {
+foreach($triplet in $TRIPLETS) {
     ni -it dir $triplet -ea ignore | out-null
     pushd $triplet
-    vcpkg list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
+    vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
         "Packing $_ for $triplet..."
         vcpkg-mkpkg "${_}:$triplet"
     }
     popd
 }
 
-foreach($triplet in $triplets) {
+foreach($triplet in $TRIPLETS) {
     pushd $triplet
     $existing_pkgs = 'ls' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/vcpkg/$triplet" 2>$null | select -skip 3 | %{ $_ -replace '^([^_]+).*', '$1' }
     gci -n *.zip | %{ 
