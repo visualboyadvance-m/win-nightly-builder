@@ -53,7 +53,7 @@ if ($iswindows) {
         }
         else { @($env:PROCESSOR_ARCHITECTURE.tolower()) * 2 }
 
-        function vsenv([string]$arch, [string]$hostarch) {
+        function setup_visual_studio_environment([string]$arch, [string]$hostarch) {
             if (-not $arch)     { $arch     = $default_arch }
             if (-not $hostarch) { $hostarch = $default_host_arch }
 
@@ -127,7 +127,7 @@ function setup_build_env([string]$triplet) {
 	    $arch = 'amd64'
 	}
 
-	vsenv $arch
+	setup_visual_studio_environment $arch
     }
 }
 
@@ -138,7 +138,7 @@ function teardown_build_env([string]$triplet) {
     }
 
     if ($triplet -match '-windows-?') {
-	vsenv
+	setup_visual_studio_environment
     }
 }
 

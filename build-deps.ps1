@@ -2,8 +2,6 @@ import-module -force $psscriptroot/vbam-builder.psm1
 
 $erroractionpreference = 'stop'
 
-$TRIPLETS = 'x86-windows-static'
-
 $build_triplets = $args
 
 if (-not $build_triplets) { $build_triplets = $TRIPLETS }
@@ -46,7 +44,7 @@ foreach ($triplet in $build_triplets) {
 
     ri -r -fo $build_dir/* -ea ignore
 
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET=$triplet -DUPSTREAM_RELEASE=TRUE -G Ninja
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET="$triplet" -DUPSTREAM_RELEASE=TRUE -G Ninja
     ninja
 
     popd
