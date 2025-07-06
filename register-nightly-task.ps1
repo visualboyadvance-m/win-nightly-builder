@@ -5,7 +5,7 @@ $runat    = '23:00'
 
 $trigger = new-scheduledtasktrigger -at $runat -daily
 
-if (-not (test-path /logs -ea ignore)) { ni -it dir /logs }
+if (-not (test-path /logs)) { ni -it dir /logs }
 
 $action  = new-scheduledtaskaction `
     -execute 'pwsh' `

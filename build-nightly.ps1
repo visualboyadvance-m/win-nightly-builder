@@ -9,7 +9,7 @@ $force_build = if ($args[0] -match '^--?f') { $true } else { $false }
 
 update_vcpkg
 
-if (-not (test-path $repo_path -ea ignore)) {
+if (-not (test-path $repo_path)) {
     pushd $REPOS_ROOT
 
     git clone https://github.com/visualboyadvance-m/visualboyadvance-m.git visualboyadvance-m-nightly
@@ -76,7 +76,7 @@ git pull --rebase
 	try {
 	    cmake .. -DVCPKG_TARGET_TRIPLET=$triplet -DCMAKE_BUILD_TYPE=$build_type -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY=$translations_only_str -G Ninja
 
-	    if (-not (test-path build.ninja -ea ignore)) { throw 'cmake failed' }
+	    if (-not (test-path build.ninja)) { throw 'cmake failed' }
 
 	    ninja
 

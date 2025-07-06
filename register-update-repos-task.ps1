@@ -4,7 +4,7 @@ $taskname = 'VBAM Hourly Update Repos'
 
 $trigger = new-scheduledtasktrigger -once:$false -at 00:00 -repetitioninterval (new-timespan -hours 1)
 
-if (-not (test-path /logs -ea ignore)) { ni -it dir /logs }
+if (-not (test-path /logs)) { ni -it dir /logs }
 
 $action  = new-scheduledtaskaction `
     -execute 'pwsh' `

@@ -7,14 +7,14 @@ $REPOS_ROOT     = $(if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } e
 $DEP_PORTS      = write pkgconf zlib pthreads 'sdl3[vulkan]' faudio gettext-libintl nanosvg wxwidgets openal-soft 'ffmpeg[x264,x265]'
 $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
 $TRIPLETS       = if ($iswindows) {
-		      (write x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }),'x86-mingw-static','x64-mingw-static' | write
+		      'x86-mingw-static','x64-mingw-static',(write x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }) | write
 		  } elseif ($islinux) {
 		      'x64-linux'
 		  } elseif ($ismacos) {
 		      'x64-macos','arm64-macos'
 		  }
 
-if ((test-path '/program files/git/cmd' -ea ignore) -and ($env:PATH -notmatch '[/\\]git[/\\]cmd')) {
+if ((test-path '/program files/git/cmd') -and ($env:PATH -notmatch '[/\\]git[/\\]cmd')) {
     $env:PATH += ';' + (resolve-path '/program files/git/cmd')
 }
 
@@ -30,14 +30,34 @@ if (-not $env:VCPKG_OVERLAY_PORTS) {
 
 if ($islinux -and (-not $env:TEMP)) { $env:TEMP = '/tmp' }
 
+$script:saved_env = [ordered]@{}
+
+function save_env {
+    $script:saved_env.clear()
+
+    gci env: | %{ $script:saved_env[$_.name] = $_.value }
+}
+
+function restore_env {
+    if (-not $script:saved_env.count) { return }
+
+    ri -force env:*
+
+    $script:saved_env.getenumerator() | %{
+	si -path env:$($_.key) -value $_.value
+    }
+}
+
+$script:current_vsenv = $null
+
 if ($iswindows) {
     # Load VS env only once.
     :OUTER foreach ($vs_year in '2022','2019','2017') {
         foreach ($vs_type in 'preview','buildtools','community') {
             foreach ($x86 in '',' (x86)') {
-                $vs_path="/program files${x86}/microsoft visual studio/${vs_year}/${vs_type}/Common7/Tools"
+                $vs_path="/program files${x86}/microsoft visual studio/${vs_year}/${vs_type}/common7/tools"
 
-                if (test-path $vs_path -ea ignore) {
+                if (test-path $vs_path) {
                     break OUTER
                 }
                 else {
@@ -53,12 +73,14 @@ if ($iswindows) {
         }
         else { @($env:PROCESSOR_ARCHITECTURE.tolower()) * 2 }
 
-        function setup_visual_studio_environment([string]$arch, [string]$hostarch) {
+        function vsenv([string]$arch, [string]$hostarch) {
             if (-not $arch)     { $arch     = $default_arch }
             if (-not $hostarch) { $hostarch = $default_host_arch }
 
             if ($arch     -eq 'x64') { $arch     = 'amd64' }
             if ($hostarch -eq 'x64') { $hostarch = 'amd64' }
+
+	    if ($script:current_vsenv -eq "${hostarch}:$arch") { return }
 
             $saved_vcpkg_root = $env:VCPKG_ROOT
 
@@ -67,12 +89,14 @@ if ($iswindows) {
             if ($saved_vcpkg_root) {
                 $env:VCPKG_ROOT = $saved_vcpkg_root
             }
+
+	    $script:current_vsenv = "${hostarch}:$arch"
         }
     }
 }
 
 function update_vcpkg {
-    if (-not (test-path $env:VCPKG_ROOT -ea ignore)) {
+    if (-not (test-path $env:VCPKG_ROOT)) {
 	pushd $REPOS_ROOT
 
 	git clone git@github.com:microsoft/vcpkg
@@ -89,7 +113,7 @@ function update_vcpkg {
 
     popd
 
-    if (-not (test-path $env:VCPKG_OVERLAY_PORTS -ea ignore)) {
+    if (-not (test-path $env:VCPKG_OVERLAY_PORTS)) {
 	pushd $REPOS_ROOT
 
 	git clone git@github.com:visualboyadvance-m/vcpkg-overlay
@@ -104,21 +128,29 @@ function update_vcpkg {
     popd
 }
 
+$script:current_arch      = $null
+$script:current_toolchain = $null
+
 function setup_build_env([string]$triplet) {
     if (-not $iswindows) { return }
 
-    $triplet -match '^([^-]+)' | out-null
-    $arch = $matches[1]
+    $triplet -match '^([^-]+)-([^-]+)' | out-null
+    $arch      = $matches[1]
+    $toolchain = $matches[2]
+
+    if (($arch -eq $script:current_arch) -and ($toolchain -eq $script:current_toolchain)) { return }
+
+    $script:current_arch      = $arch
+    $script:current_toolchain = $toolchain
+
+    restore_env
+    save_env
 
     if ($triplet -match 'mingw') {
-	ri variable:global:orig_path -ea ignore
-
 	if ($arch -eq 'x86') {
-	    $global:orig_path = $env:PATH
 	    $env:PATH = 'c:/msys64/mingw32/bin;' + $env:PATH
 	}
 	elseif ($arch -eq 'x64') {
-	    $global:orig_path = $env:PATH
 	    $env:PATH = 'c:/msys64/clang64/bin;' + $env:PATH
 	}
     }
@@ -127,19 +159,15 @@ function setup_build_env([string]$triplet) {
 	    $arch = 'amd64'
 	}
 
-	setup_visual_studio_environment $arch
+	vsenv $arch
     }
 }
 
 function teardown_build_env([string]$triplet) {
-    if ($global:orig_path) {
-	$env:PATH = $global:orig_path
-	ri variable:global:orig_path -ea ignore
-    }
-
-    if ($triplet -match '-windows-?') {
-	setup_visual_studio_environment
-    }
+    restore_env
+    $script:current_vsenv     = $null
+    $script:current_arch      = $null
+    $script:current_toolchain = $null
 }
 
 export-modulemember -variable REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,TRIPLETS `
