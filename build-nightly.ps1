@@ -86,8 +86,6 @@ git pull --rebase
 
 	popd
 
-	teardown_build_env $triplet
-
 	if ($error) {
 	    write-error $error
 	    popd
@@ -99,6 +97,8 @@ git pull --rebase
 	}
     }
 }
+
+teardown_build_env
 
 ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir | out-null

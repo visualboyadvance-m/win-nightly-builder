@@ -61,7 +61,7 @@ foreach ($triplet in $TRIPLETS) {
     vcpkg --triplet $triplet upgrade $DEP_PORT_NAMES --no-dry-run
 }
 
-teardown_build_env $triplet
+teardown_build_env
 
 # Do full upgrade of all deps, repeat for the MinGW triplets because the toolchain has to be in $env:PATH.
 vcpkg upgrade --no-dry-run

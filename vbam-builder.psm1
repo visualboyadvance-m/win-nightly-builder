@@ -163,7 +163,7 @@ function setup_build_env([string]$triplet) {
     }
 }
 
-function teardown_build_env([string]$triplet) {
+function teardown_build_env {
     restore_env
     $script:current_vsenv     = $null
     $script:current_arch      = $null
