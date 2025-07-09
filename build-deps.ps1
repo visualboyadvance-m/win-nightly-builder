@@ -31,15 +31,7 @@ if (-not (test-path $repo_path)) {
 }
 
 foreach ($triplet in $build_triplets) {
-    if ($triplet -eq 'x64-mingw-static') {
-	'PATH: ' + $env:PATH
-    }
-
     setup_build_env $triplet
-
-    if ($triplet -eq 'x64-mingw-static') {
-	'PATH: ' + $env:PATH
-    }
 
     vcpkg --triplet $triplet install --recurse --keep-going $DEP_PORTS
     vcpkg --triplet $triplet upgrade $DEP_PORT_NAMES --no-dry-run
@@ -58,3 +50,15 @@ foreach ($triplet in $build_triplets) {
 }
 
 teardown_build_env
+
+# Do full upgrade of all deps, repeat for the MinGW triplets because the toolchain has to be in $env:PATH.
+vcpkg upgrade --no-dry-run
+
+foreach ($triplet in (write x86-mingw-static x64-mingw-static)) {
+    setup_build_env $triplet
+    vcpkg upgrade --no-dry-run
+}
+
+teardown_build_env
+
+'Finished building and upgrading all dependencies and testing the build for all triplets, please check the log for any issues.'

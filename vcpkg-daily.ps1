@@ -59,9 +59,19 @@ foreach ($triplet in $TRIPLETS) {
 
     vcpkg --triplet $triplet install --recurse --keep-going $DEP_PORTS
     vcpkg --triplet $triplet upgrade $DEP_PORT_NAMES --no-dry-run
-
-    teardown_build_env $triplet
 }
+
+teardown_build_env $triplet
+
+# Do full upgrade of all deps, repeat for the MinGW triplets because the toolchain has to be in $env:PATH.
+vcpkg upgrade --no-dry-run
+
+foreach ($triplet in (write x86-mingw-static x64-mingw-static)) {
+    setup_build_env $triplet
+    vcpkg upgrade --no-dry-run
+}
+
+teardown_build_env
 
 # Generate binary packages
 
