@@ -30,6 +30,13 @@ if (-not (test-path $repo_path)) {
     popd
 }
 
+pushd $repo_path
+
+git pull --rebase
+git submodule update --init --recursive
+
+popd
+
 foreach ($triplet in $build_triplets) {
     setup_build_env $triplet
 

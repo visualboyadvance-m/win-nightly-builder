@@ -2,6 +2,8 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 
 $erroractionpreference = 'stop'
 
+$TRIPLETS = write x86-mingw-static x64-windows-static arm64-windows-static
+
 $repo_path = join-path $REPOS_ROOT visualboyadvance-m-nightly
 $stage_dir = join-path $env:TEMP   vbam-nightly-build
 
@@ -22,6 +24,7 @@ if (-not (test-path $repo_path)) {
 pushd $repo_path
 
 git fetch --all --prune
+git submodule update --init --recursive
 
 $head    = $(git rev-parse --short HEAD)
 $current = $(git rev-parse --short origin/master)
@@ -74,7 +77,7 @@ git pull --rebase
 	    { 'TRUE' } else { 'FALSE' };
 
 	try {
-	    cmake .. -DVCPKG_TARGET_TRIPLET=$triplet -DCMAKE_BUILD_TYPE=$build_type -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY=$translations_only_str -G Ninja
+	    cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE="$build_type" -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="$translations_only_str" -G Ninja
 
 	    if (-not (test-path build.ninja)) { throw 'cmake failed' }
 
