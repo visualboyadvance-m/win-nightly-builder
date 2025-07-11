@@ -60,9 +60,11 @@ if ((-not $force_build) -and `
 
 git pull --rebase
 
+popd
+
 :triplet foreach ($triplet in $TRIPLETS) {
     :build foreach ($build_type in 'Release', 'Debug') {
-	$build_dir = "build-$triplet-$build_type"
+	$build_dir = "$repo_path/build-$triplet-$build_type"
 
 	ri -r -fo  $build_dir -ea ignore
 	ni -it dir $build_dir | out-null
@@ -90,8 +92,8 @@ git pull --rebase
 	popd
 
 	if ($error) {
+	    teardown_build_env
 	    write-error $error
-	    popd
 	    return
 	}
 
