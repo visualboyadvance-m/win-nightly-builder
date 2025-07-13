@@ -109,10 +109,10 @@ ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir | out-null
 
 if (-not $translations_only) {
-    cpi -fo build-*/*.zip $stage_dir
+    cpi -fo $repo_path/build-*/*.zip $stage_dir
 }
 else {
-    cpi -fo build-*/translations.zip  $stage_dir
+    cpi -fo $repo_path/build-*/translations.zip  $stage_dir
 }
 
 popd
