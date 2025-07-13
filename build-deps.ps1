@@ -1,6 +1,7 @@
 import-module -force $psscriptroot/vbam-builder.psm1
 
 $erroractionpreference = 'stop'
+$progresspreference    = 'silentlycontinue'
 
 $build_triplets = $args
 
@@ -46,7 +47,7 @@ foreach ($triplet in $build_triplets) {
     $build_dir = join-path $repo_path build-$triplet
 
     ni -it dir $build_dir   -ea ignore | out-null
-    ri -r -fo  $build_dir/* -ea ignore | out-null
+    ri -r -fo  $build_dir/* -ea ignore
 
     pushd $build_dir
 

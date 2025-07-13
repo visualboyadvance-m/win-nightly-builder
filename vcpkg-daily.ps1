@@ -2,6 +2,7 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 import-module -force "$REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 
 $erroractionpreference = 'stop'
+$progresspreference    = 'silentlycontinue'
 
 $stage_dir = "$env:TEMP/vbam-daily-packages"
 
@@ -23,7 +24,7 @@ $new_wx_hash = (get-filehash -a sha512 master.tar.gz).hash.tolower()
 
 popd
 
-ri -r -fo $temp_dir | out-null
+ri -r -fo $temp_dir
 
 pushd $env:VCPKG_OVERLAY_PORTS
 
@@ -75,7 +76,7 @@ teardown_build_env
 
 # Generate binary packages
 
-ri -r -fo  $stage_dir -ea ignore | out-null
+ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir -ea ignore | out-null
 
 pushd $stage_dir
@@ -106,7 +107,7 @@ foreach ($triplet in $TRIPLETS) {
 
 popd
 
-ri -r -fo $stage_dir | out-null
+ri -r -fo $stage_dir
 
 'INFO: vcpkg packages upgrade successful!'
 

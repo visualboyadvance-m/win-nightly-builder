@@ -1,6 +1,7 @@
 import-module -force "$psscriptroot/vbam-builder.psm1"
 
 $erroractionpreference = 'stop'
+$progresspreference    = 'silentlycontinue'
 
 $TRIPLETS = write x86-mingw-static x64-windows-static arm64-windows-static
 
@@ -66,7 +67,7 @@ popd
     :build foreach ($build_type in 'Release', 'Debug') {
 	$build_dir = "$repo_path/build-$triplet-$build_type"
 
-	ri -r -fo  $build_dir -ea ignore | out-null
+	ri -r -fo  $build_dir -ea ignore
 	ni -it dir $build_dir | out-null
 
 	pushd $build_dir
@@ -105,7 +106,7 @@ popd
 
 teardown_build_env
 
-ri -r -fo  $stage_dir -ea ignore | out-null
+ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir | out-null
 
 if (-not $translations_only) {
@@ -123,6 +124,6 @@ gci -n | %{ ("put {0}`nchmod 664 {0}" -f $_) | sftp sftpuser@posixsh.org:nightly
 
 popd
 
-ri -r -fo $stage_dir | out-null
+ri -r -fo $stage_dir
 
 'INFO: Build successful!'
