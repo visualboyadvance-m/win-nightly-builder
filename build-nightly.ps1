@@ -66,7 +66,7 @@ popd
     :build foreach ($build_type in 'Release', 'Debug') {
 	$build_dir = "$repo_path/build-$triplet-$build_type"
 
-	ri -r -fo  $build_dir -ea ignore
+	ri -r -fo  $build_dir -ea ignore | out-null
 	ni -it dir $build_dir | out-null
 
 	pushd $build_dir
@@ -105,7 +105,7 @@ popd
 
 teardown_build_env
 
-ri -r -fo  $stage_dir -ea ignore
+ri -r -fo  $stage_dir -ea ignore | out-null
 ni -it dir $stage_dir | out-null
 
 if (-not $translations_only) {
@@ -123,6 +123,6 @@ gci -n | %{ ("put {0}`nchmod 664 {0}" -f $_) | sftp sftpuser@posixsh.org:nightly
 
 popd
 
-ri -r -fo $stage_dir
+ri -r -fo $stage_dir | out-null
 
 'INFO: Build successful!'

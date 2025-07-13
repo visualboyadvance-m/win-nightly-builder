@@ -23,7 +23,7 @@ $new_wx_hash = (get-filehash -a sha512 master.tar.gz).hash.tolower()
 
 popd
 
-ri -r -fo $temp_dir
+ri -r -fo $temp_dir | out-null
 
 pushd $env:VCPKG_OVERLAY_PORTS
 
@@ -75,8 +75,7 @@ teardown_build_env
 
 # Generate binary packages
 
-ri -r -fo $stage_dir -ea ignore
-
+ri -r -fo  $stage_dir -ea ignore | out-null
 ni -it dir $stage_dir -ea ignore | out-null
 
 pushd $stage_dir
@@ -107,7 +106,7 @@ foreach ($triplet in $TRIPLETS) {
 
 popd
 
-ri -r -fo $stage_dir
+ri -r -fo $stage_dir | out-null
 
 'INFO: vcpkg packages upgrade successful!'
 

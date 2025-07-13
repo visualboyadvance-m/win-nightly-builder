@@ -41,7 +41,7 @@ function save_env {
 function restore_env {
     if (-not $script:saved_env.count) { return }
 
-    ri -force env:*
+    ri -force env:* | out-null
 
     $script:saved_env.getenumerator() | %{
 	si -path env:$($_.key) -value $_.value
