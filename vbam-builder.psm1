@@ -68,29 +68,23 @@ if ($iswindows) {
     }
 
     if ($vs_path) {
-        $default_host_arch,$default_arch = if ($env:PROCESSOR_ARCHITECTURE -ieq 'AMD64') {
-            @('amd64') * 2
-        }
-        else { @($env:PROCESSOR_ARCHITECTURE.tolower()) * 2 }
+        $default_arch = $env:PROCESSOR_ARCHITECTURE.tolower()
 
-        function vsenv([string]$arch, [string]$hostarch) {
-            if (-not $arch)     { $arch     = $default_arch }
-            if (-not $hostarch) { $hostarch = $default_host_arch }
+        function vsenv([string]$arch) {
+            if (-not $arch)      { $arch = $default_arch }
+            if ($arch -eq 'x64') { $arch = 'amd64' }
 
-            if ($arch     -eq 'x64') { $arch     = 'amd64' }
-            if ($hostarch -eq 'x64') { $hostarch = 'amd64' }
-
-	    if ($script:current_vsenv -eq "${hostarch}:$arch") { return }
+	    if ($script:current_vsenv -eq $arch) { return }
 
             $saved_vcpkg_root = $env:VCPKG_ROOT
 
-            & $vs_path/Launch-VsDevShell.ps1 -hostarch $hostarch -arch $arch -skipautomaticlocation
+            & $vs_path/Launch-VsDevShell.ps1 -arch $arch -skipautomaticlocation
 
             if ($saved_vcpkg_root) {
                 $env:VCPKG_ROOT = $saved_vcpkg_root
             }
 
-	    $script:current_vsenv = "${hostarch}:$arch"
+	    $script:current_vsenv = $arch
         }
     }
 }

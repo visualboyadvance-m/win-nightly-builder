@@ -3,7 +3,10 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 $erroractionpreference = 'stop'
 $progresspreference    = 'silentlycontinue'
 
-$TRIPLETS = write x86-mingw-static x64-windows-static arm64-windows-static
+#$TRIPLETS = write x86-mingw-static x64-windows-static arm64-windows-static
+$TRIPLETS = write x86-mingw-static x64-windows-static
+
+$CMAKE = if ($iswindows) { '/progra~1/cmake/bin/cmake.exe' } else { 'cmake' }
 
 $repo_path = join-path $REPOS_ROOT visualboyadvance-m-nightly
 $stage_dir = join-path $env:TEMP   vbam-nightly-build
@@ -76,11 +79,16 @@ popd
 
 	$error = $null
 
+	$compiler = if ($triplet -match 'mingw') { 'gcc' } else { (get-command cl).source }
+
 	$translations_only_str = if ($translations_only) `
 	    { 'TRUE' } else { 'FALSE' };
 
 	try {
-	    cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE="$build_type" -DUPSTREAM_RELEASE=TRUE -DTRANSLATIONS_ONLY="$translations_only_str" -G Ninja
+	    & $CMAKE .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE="$build_type" -DUPSTREAM_RELEASE=TRUE `
+			-DTRANSLATIONS_ONLY="$translations_only_str" `
+			-DCMAKE_C_COMPILER="$compiler" -DCMAKE_CXX_COMPILER="$compiler" `
+			-G Ninja
 
 	    if (-not (test-path build.ninja)) { throw 'cmake failed' }
 
