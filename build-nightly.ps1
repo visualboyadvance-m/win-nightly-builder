@@ -3,15 +3,19 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 $erroractionpreference = 'stop'
 $progresspreference    = 'silentlycontinue'
 
-#$TRIPLETS = write x86-mingw-static x64-windows-static arm64-windows-static
-$TRIPLETS = write x86-mingw-static x64-windows-static
+$default_triplets = write x86-mingw-static x64-windows-static arm64-windows-static
 
 $CMAKE = if ($iswindows) { '/progra~1/cmake/bin/cmake.exe' } else { 'cmake' }
 
 $repo_path = join-path $REPOS_ROOT visualboyadvance-m-nightly
 $stage_dir = join-path $env:TEMP   vbam-nightly-build
 
-$force_build = if ($args[0] -match '^--?f') { $true } else { $false }
+$force_build = $args | ?{ $_ -match '^--?f' }
+$TRIPLETS    = $args | ?{ $_ -notmatch '^--?' }
+
+if (-not $TRIPLETS) {
+    $TRIPLETS = $default_triplets
+}
 
 update_vcpkg
 
