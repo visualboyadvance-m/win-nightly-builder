@@ -22,6 +22,10 @@ curl -LO https://github.com/wxWidgets/wxWidgets/archive/master.tar.gz
 
 $new_wx_hash = (get-filehash -a sha512 master.tar.gz).hash.tolower()
 
+curl -LO https://github.com/libsdl-org/SDL/archive/main.tar.gz
+
+$new_sdl_hash = (get-filehash -a sha512 main.tar.gz).hash.tolower()
+
 popd
 
 ri -r -fo $temp_dir
@@ -50,6 +54,31 @@ if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
 
     if (-not $?) {
         write-error 'failed to update wxwidgets port in overlay'
+    }
+}
+
+if (-not ((gc sdl3/portfile.cmake) -match $new_sdl_hash)) {
+    @(gc sdl3/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_sdl_hash" } | set-content sdl3/portfile.cmake
+
+    $sdl_master_ver = (
+        (iwr https://raw.githubusercontent.com/libsdl-org/sdl/refs/heads/main/include/SDL3/SDL_version.h).content -split '\n' |
+        %{ if ($_ -match '^#define SDL_(?:MAJOR|MINOR|MICRO)_VERSION *(\d+)$') { $matches[1] } }
+    ) -join '.'
+
+    @(gc sdl3/vcpkg.json) | %{
+        $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
+            $matches.1 + $sdl_master_ver + '-' +
+            $(if ($matches.2 -ne $sdl_master_ver) { 1 } `
+              else { [convert]::toint32($matches.3) + 1 }) +
+            $matches.4 } `
+        else { $_ }) } | set-content sdl3/vcpkg.json
+
+    git commit -a -m "sdl3: update master hash + bump ver" --signoff -S
+
+    git push
+
+    if (-not $?) {
+        write-error 'failed to update sdl3 port in overlay'
     }
 }
 
