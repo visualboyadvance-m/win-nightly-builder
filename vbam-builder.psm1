@@ -164,6 +164,26 @@ function teardown_build_env {
     $script:current_toolchain = $null
 }
 
-export-modulemember -variable REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,TRIPLETS `
-		    -function update_vcpkg,setup_build_env,teardown_build_env `
+function get-triplets {
+    if ($myinvocation.expectinginput) { $args = $input }
+
+    $triplets = $args | %{ $_.tolower() } | %{
+        if ($_ -match '^(x[86][64]|arm64)$') {
+            "$_-windows-static"
+        }
+        elseif ($_ -match '^(x[86]|[64])-mingw$') {
+            "$_-mingw-static"
+        }
+        elseif ($_ -notmatch '^-') {
+            $_
+        }
+    } | select -unique
+
+    if (-not $triplets) { return $TRIPLETS }
+
+    $triplets
+}
+
+export-modulemember -variable REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES `
+		    -function update_vcpkg,setup_build_env,teardown_build_env,get-triplets `
 		    -alias vcpkg

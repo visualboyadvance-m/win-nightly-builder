@@ -8,6 +8,8 @@ $stage_dir = "$env:TEMP/vbam-daily-packages"
 
 $force_build = if ($args[0] -match '^--?f') { $true} else { $false }
 
+$build_triplets = $args | get-triplets
+
 "INFO: vcpkg packages upgrade started on $(date)."
 
 update_vcpkg
@@ -84,7 +86,7 @@ if (-not ((gc sdl3/portfile.cmake) -match $new_sdl_hash)) {
 
 popd
 
-foreach ($triplet in $TRIPLETS) {
+foreach ($triplet in $build_triplets) {
     setup_build_env $triplet
 
     vcpkg --triplet $triplet install --recurse --keep-going $DEP_PORTS
@@ -110,7 +112,7 @@ ni -it dir $stage_dir -ea ignore | out-null
 
 pushd $stage_dir
 
-foreach ($triplet in $TRIPLETS) {
+foreach ($triplet in $build_triplets) {
     ni -it dir $triplet -ea ignore | out-null
     pushd $triplet
     vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
@@ -120,7 +122,7 @@ foreach ($triplet in $TRIPLETS) {
     popd
 }
 
-foreach ($triplet in $TRIPLETS) {
+foreach ($triplet in $build_triplets) {
     pushd $triplet
     $existing_pkgs = 'ls' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/vcpkg/$triplet" 2>$null | select -skip 3 | %{ $_ -replace '^([^_]+).*', '$1' }
     gci -n *.zip | %{ 

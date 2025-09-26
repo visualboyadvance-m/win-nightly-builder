@@ -11,10 +11,9 @@ $repo_path = join-path $REPOS_ROOT visualboyadvance-m-nightly
 $stage_dir = join-path $env:TEMP   vbam-nightly-build
 
 $force_build = $args | ?{ $_ -match '^--?f' }
-$TRIPLETS    = $args | ?{ $_ -notmatch '^--?' }
 
-if (-not $TRIPLETS) {
-    $TRIPLETS = $default_triplets
+if (-not ($build_triplets = $args | get-triplets)) {
+    $build_triplets = $default_triplets
 }
 
 update_vcpkg
@@ -70,7 +69,7 @@ git pull --rebase
 
 popd
 
-:triplet foreach ($triplet in $TRIPLETS) {
+:triplet foreach ($triplet in $build_triplets) {
     :build foreach ($build_type in 'Release', 'Debug') {
 	$build_dir = "$repo_path/build-$triplet-$build_type"
 

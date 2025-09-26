@@ -27,9 +27,6 @@ popd
 foreach ($triplet in $build_triplets) {
     setup_build_env $triplet
 
-    vcpkg --triplet $triplet install --recurse --keep-going $DEP_PORTS
-    vcpkg --triplet $triplet upgrade $DEP_PORT_NAMES --no-dry-run
-
     $build_dir = join-path $repo_path build-$triplet
 
     ni -it dir $build_dir   -ea ignore | out-null
@@ -38,21 +35,10 @@ foreach ($triplet in $build_triplets) {
     pushd $build_dir
 
     cmake .. -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET="$triplet" -DUPSTREAM_RELEASE=TRUE -G Ninja
-    ninja
 
     popd
 }
 
 teardown_build_env
 
-# Do full upgrade of all deps, repeat for the MinGW triplets because the toolchain has to be in $env:PATH.
-vcpkg upgrade --no-dry-run
-
-foreach ($triplet in (write x86-mingw-static x64-mingw-static)) {
-    setup_build_env $triplet
-    vcpkg upgrade --no-dry-run
-}
-
-teardown_build_env
-
-'Finished building and upgrading all dependencies and testing the build for all triplets, please check the log for any issues.'
+'Finished downloading all dependencies, please check the log for any issues.'
