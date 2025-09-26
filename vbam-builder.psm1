@@ -167,7 +167,7 @@ function teardown_build_env {
 function get-triplets {
     if ($myinvocation.expectinginput) { $args = $input }
 
-    $triplets = $args | %{ $_.tolower() } | %{
+    $requested_triplets = $args | %{ $_.tolower() } | %{
         if ($_ -match '^(x[86][64]|arm64)$') {
             "$_-windows-static"
         }
@@ -179,9 +179,9 @@ function get-triplets {
         }
     } | select -unique
 
-    if (-not $triplets) { return $TRIPLETS }
+    if (-not $requested_triplets) { return $TRIPLETS }
 
-    $triplets
+    $requested_triplets
 }
 
 export-modulemember -variable REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES `
