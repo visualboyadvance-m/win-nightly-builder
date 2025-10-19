@@ -60,18 +60,13 @@ popd
 foreach ($triplet in $build_triplets) {
     setup_build_env $triplet
 
-    vcpkg --triplet $triplet install --recurse --keep-going $DEP_PORTS
-    vcpkg --triplet $triplet upgrade $DEP_PORT_NAMES --no-dry-run
-}
+    foreach ($port in $DEP_PORTS) {
+        vcpkg --triplet $triplet install --recurse --keep-going $port
+    }
 
-teardown_build_env
-
-# Do full upgrade of all deps, repeat for the MinGW triplets because the toolchain has to be in $env:PATH.
-vcpkg upgrade --no-dry-run
-
-foreach ($triplet in (write x86-mingw-static x64-mingw-static)) {
-    setup_build_env $triplet
-    vcpkg upgrade --no-dry-run
+    foreach ($port in $DEP_PORT_NAMES) {
+        vcpkg --triplet $triplet upgrade --no-dry-run --keep-going $port
+    }
 }
 
 teardown_build_env
