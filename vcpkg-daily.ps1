@@ -61,11 +61,11 @@ foreach ($triplet in $build_triplets) {
     setup_build_env $triplet
 
     foreach ($port in $DEP_PORTS) {
-        vcpkg --triplet $triplet install --recurse --keep-going $port
+        vcpkg --triplet $triplet install --allow-unsupported --recurse --keep-going $port
     }
 
     foreach ($port in $DEP_PORT_NAMES) {
-        vcpkg --triplet $triplet upgrade --no-dry-run --keep-going $port
+        vcpkg --triplet $triplet upgrade --allow-unsupported --no-dry-run --keep-going $port
     }
 }
 
