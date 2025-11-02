@@ -14,48 +14,50 @@ $build_triplets = $args | get-triplets
 
 update_vcpkg
 
-$temp_dir = "$env:TEMP/wx-port-temp"
+if (-not ($args -match '^--?no-wx')) {
+    $temp_dir = "$env:TEMP/wx-port-temp"
 
-ni -it dir $temp_dir -ea ignore | out-null
+    ni -it dir $temp_dir -ea ignore | out-null
 
-pushd $temp_dir
+    pushd $temp_dir
 
-curl -LO https://github.com/wxWidgets/wxWidgets/archive/master.tar.gz
+    curl -LO https://github.com/wxWidgets/wxWidgets/archive/master.tar.gz
 
-$new_wx_hash = (get-filehash -a sha512 master.tar.gz).hash.tolower()
+    $new_wx_hash = (get-filehash -a sha512 master.tar.gz).hash.tolower()
 
-popd
+    popd
 
-ri -r -fo $temp_dir
+    ri -r -fo $temp_dir
 
-pushd $env:VCPKG_OVERLAY_PORTS
+    pushd $env:VCPKG_OVERLAY_PORTS
 
-if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
-    @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
+    if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
+        @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
 
-    $wx_master_ver = (
-        iwr https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
-        sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
-    ).matches.groups[1].value
+        $wx_master_ver = (
+            iwr https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
+            sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
+        ).matches.groups[1].value
 
-    @(gc .\wxwidgets\vcpkg.json) | %{
-        $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
-            $matches.1 + $wx_master_ver + '-' +
-            $(if ($matches.2 -ne $wx_master_ver) { 1 } `
-              else { [convert]::toint32($matches.3) + 1 }) +
-            $matches.4 } `
-        else { $_ }) } | set-content wxwidgets/vcpkg.json
+        @(gc .\wxwidgets\vcpkg.json) | %{
+            $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
+                $matches.1 + $wx_master_ver + '-' +
+                $(if ($matches.2 -ne $wx_master_ver) { 1 } `
+                  else { [convert]::toint32($matches.3) + 1 }) +
+                $matches.4 } `
+            else { $_ }) } | set-content wxwidgets/vcpkg.json
 
-    git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
+        git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
 
-    git push
+        git push
 
-    if (-not $?) {
-        write-error 'failed to update wxwidgets port in overlay'
+        if (-not $?) {
+            write-error 'failed to update wxwidgets port in overlay'
+        }
     }
-}
 
-popd
+    popd
+}
 
 foreach ($triplet in $build_triplets) {
     setup_build_env $triplet
