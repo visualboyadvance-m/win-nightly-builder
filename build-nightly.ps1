@@ -121,7 +121,9 @@ ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir | out-null
 
 if (-not $translations_only) {
-    cpi -fo $repo_path/build-*/*.zip $stage_dir
+    foreach ($triplet in $build_triplets) {
+	cpi -fo $repo_path/build-$triplet-*/*.zip $stage_dir
+    }
 }
 else {
     cpi -fo $repo_path/build-*/translations.zip  $stage_dir
