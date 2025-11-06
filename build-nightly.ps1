@@ -32,6 +32,7 @@ pushd $repo_path
 
 git fetch --all --prune
 git submodule update --init --recursive
+git submodule update
 
 $head    = $(git rev-parse --short HEAD)
 $current = $(git rev-parse --short origin/master)
