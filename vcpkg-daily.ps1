@@ -1,5 +1,4 @@
 import-module -force "$psscriptroot/vbam-builder.psm1"
-import-module -force "$REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 
 $erroractionpreference = 'stop'
 $progresspreference    = 'silentlycontinue'
@@ -14,7 +13,7 @@ $build_triplets = $args | get-triplets
 
 update_vcpkg
 
-if (-not ($args -match '^--?no-wx')) {
+if (-not $islinux -and -not ($args -match '^--?no-wx')) {
     $temp_dir = "$env:TEMP/wx-port-temp"
 
     ni -it dir $temp_dir -ea ignore | out-null

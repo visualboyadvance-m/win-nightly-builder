@@ -4,10 +4,10 @@
     $outputencoding = new-object system.text.utf8encoding
 
 $REPOS_ROOT     = $(if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME }) + '/source/repos'
-$DEP_PORTS      = write zlib bzip2 'liblzma[tools]' pthreads 'sdl3[vulkan]' faudio gettext-libintl nanosvg wxwidgets openal-soft 'ffmpeg[x264,x265]'
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' pthreads 'sdl3[vulkan]' faudio gettext-libintl nanosvg wxwidgets openal-soft 'ffmpeg[x264,x265]'
 $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
 $TRIPLETS       = if ($iswindows) {
-		      'x86-mingw-static','x64-mingw-static',(write x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }) | write
+		      'x86-mingw-static','x64-mingw-static',(echo x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }) | echo
 		  } elseif ($islinux) {
 		      'x64-linux'
 		  } elseif ($ismacos) {
@@ -24,7 +24,10 @@ if (-not $env:VCPKG_ROOT) {
 
 set-alias -force vcpkg (join-path $env:VCPKG_ROOT $(if ($iswindows) { 'vcpkg.exe' } else { 'vcpkg' }))
 
-if (-not $env:VCPKG_OVERLAY_PORTS) {
+if ($islinux) {
+    ri -force env:VCPKG_OVERLAY_PORTS -ea ignore
+}
+elseif (-not $env:VCPKG_OVERLAY_PORTS) {
     $env:VCPKG_OVERLAY_PORTS = join-path $REPOS_ROOT vcpkg-overlay
 }
 
@@ -107,19 +110,37 @@ function update_vcpkg {
 
     popd
 
-    if (-not (test-path $env:VCPKG_OVERLAY_PORTS)) {
-	pushd $REPOS_ROOT
+    if (-not $islinux) {
+        if (-not (test-path $env:VCPKG_OVERLAY_PORTS)) {
+            pushd $REPOS_ROOT
 
-	git clone git@github.com:visualboyadvance-m/vcpkg-overlay
+            git clone git@github.com:visualboyadvance-m/vcpkg-overlay
 
-	popd
+            popd
+        }
+
+        pushd $env:VCPKG_OVERLAY_PORTS
+
+        git pull --rebase
+
+        popd
     }
 
-    pushd $env:VCPKG_OVERLAY_PORTS
+    if (-not (test-path $REPOS_ROOT/vcpkg-binpkg-prototype)) {
+        pushd $REPOS_ROOT
+
+        git clone git@github.com:rkitover/vcpkg-binpkg-prototype
+
+        popd
+    }
+
+    pushd $REPOS_ROOT/vcpkg-binpkg-prototype
 
     git pull --rebase
 
     popd
+
+    import-module -global -force "$REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 }
 
 $script:current_arch      = $null
