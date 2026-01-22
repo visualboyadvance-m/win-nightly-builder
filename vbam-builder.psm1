@@ -4,7 +4,7 @@
     $outputencoding = new-object system.text.utf8encoding
 
 $REPOS_ROOT     = $(if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME }) + '/source/repos'
-$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' pthreads 'sdl3[vulkan]' faudio gettext-libintl nanosvg wxwidgets openal-soft 'ffmpeg[x264,x265]'
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' pthreads 'sdl3[vulkan]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft 'ffmpeg[x264,x265]'
 $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
 $TRIPLETS       = if ($iswindows) {
 		      'x86-mingw-static','x64-mingw-static',(echo x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }) | echo
