@@ -11,7 +11,7 @@ $TRIPLETS       = if ($iswindows) {
 		  } elseif ($islinux) {
 		      'x64-linux'
 		  } elseif ($ismacos) {
-		      'x64-macos','arm64-macos'
+		      'x64-osx','arm64-osx'
 		  }
 
 if ((test-path '/program files/git/cmd') -and ($env:PATH -notmatch '[/\\]git[/\\]cmd')) {
@@ -31,7 +31,7 @@ elseif (-not $env:VCPKG_OVERLAY_PORTS) {
     $env:VCPKG_OVERLAY_PORTS = join-path $REPOS_ROOT vcpkg-overlay
 }
 
-if ($islinux -and (-not $env:TEMP)) { $env:TEMP = '/tmp' }
+if (($islinux -or $ismacos) -and (-not $env:TEMP)) { $env:TEMP = '/tmp' }
 
 $script:saved_env = [ordered]@{}
 
