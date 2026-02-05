@@ -1,6 +1,8 @@
 $erroractionpreference = 'stop'
 
-$env:PATH += ';' + (resolve-path '/program files/git/cmd')
+if ($iswindows) {
+    $env:PATH += ';' + (resolve-path '/program files/git/cmd')
+}
 
 $root = if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME }
 
