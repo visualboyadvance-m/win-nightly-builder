@@ -1,3 +1,5 @@
+import-module -force "$psscriptroot/vbam-builder.psm1"
+
 $erroractionpreference = 'stop'
 
 $taskname = 'MSYS2 Daily Update'
@@ -5,13 +7,13 @@ $runat    = '12:00'
 
 $trigger = new-scheduledtasktrigger -at $runat -daily
 
-if (-not (test-path /logs)) { ni -it dir /logs }
+if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
 
 $action  = new-scheduledtaskaction `
     -execute 'pwsh' `
     -argument ("-noprofile -executionpolicy remotesigned " + `
 	"-command ""& '$(join-path $psscriptroot msys2-update.ps1)'""" + `
-	" *>> /logs/msys2-update.log")
+	" *>> $ROOT/logs/msys2-update.log")
 
 $password = (get-credential $env:username).getnetworkcredential().password
 

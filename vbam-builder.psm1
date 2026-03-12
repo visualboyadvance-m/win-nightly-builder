@@ -3,7 +3,9 @@
 [console]::outputencoding = [console]::inputencoding = `
     $outputencoding = new-object system.text.utf8encoding
 
-$REPOS_ROOT     = $(if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME }) + '/source/repos'
+$ROOT           = $(if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME })
+
+$REPOS_ROOT     = $ROOT + '/source/repos'
 
 $DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' pthreads 'sdl3[vulkan]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft 'ffmpeg[x264,x265]'
 
@@ -524,6 +526,6 @@ function get-triplets {
     }
 }
 
-export-modulemember -variable REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES `
+export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES `
 		    -function setup_build_env,teardown_build_env,get-triplets `
 		    -alias vcpkg

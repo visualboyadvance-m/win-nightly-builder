@@ -1,16 +1,18 @@
+import-module -force "$psscriptroot/vbam-builder.psm1"
+
 $erroractionpreference = 'stop'
 
 $taskname = 'VBAM Hourly Update Repos'
 
 $trigger = new-scheduledtasktrigger -once:$false -at 00:00 -repetitioninterval (new-timespan -hours 1)
 
-if (-not (test-path /logs)) { ni -it dir /logs }
+if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
 
 $action  = new-scheduledtaskaction `
     -execute 'pwsh' `
     -argument ("-executionpolicy remotesigned " + `
 	"-command ""& '$(join-path $psscriptroot update-repos.ps1)'""" + `
-	" *>> /logs/update-repos.log")
+	" *>> $ROOT/logs/update-repos.log")
 
 $password = (get-credential $env:username).getnetworkcredential().password
 

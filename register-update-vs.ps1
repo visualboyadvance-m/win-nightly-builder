@@ -2,8 +2,8 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 
 $erroractionpreference = 'stop'
 
-$taskname = 'VBAM vcpkg Daily Upgrade'
-$runat    = '21:00'
+$taskname = 'VBAM Visual Studio Nightly Upgrade'
+$runat    = '08:00'
 
 $trigger = new-scheduledtasktrigger -at $runat -daily
 
@@ -12,17 +12,18 @@ if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
 $action  = new-scheduledtaskaction `
     -execute 'pwsh' `
     -argument ("-executionpolicy remotesigned " + `
-	"-command ""& '$(join-path $psscriptroot vcpkg-daily.ps1)'""" + `
-	" *>> $ROOT/logs/vcpkg-daily.log")
+	"-command ""& '$(join-path $psscriptroot update-vs.ps1)'""" + `
+	" *>> $ROOT/logs/update-vs.log")
 
-$password = (get-credential $env:username).getnetworkcredential().password
+$principal = new-scheduledtaskprincipal `
+    -userid $env:USERNAME `
+    -logontype interactive `
+    -runlevel highest
 
 register-scheduledtask -force `
     -taskname $taskname `
     -trigger $trigger -action $action `
-    -user $env:username `
-    -password $password `
-    -runlevel highest `
+    -principal $principal `
     -ea stop | out-null
 
 "Task '$taskname' successfully registered to run daily at $runat."
