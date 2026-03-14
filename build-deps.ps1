@@ -3,9 +3,7 @@ import-module -force $psscriptroot/vbam-builder.psm1
 $erroractionpreference = 'stop'
 $progresspreference    = 'silentlycontinue'
 
-$build_triplets = $args | get-triplets
-
-update_vcpkg
+$build_triplets = get-triplets @args
 
 $repo_path = join-path $REPOS_ROOT visualboyadvance-m
 
@@ -25,32 +23,34 @@ git submodule update --init --recursive
 popd
 
 foreach ($triplet in $build_triplets) {
-    setup_build_env $triplet
+    foreach ($tk in $triplet.toolkits) {
+        setup_build_env $triplet $tk
 
-    vcpkg --triplet $triplet install --recurse --keep-going $DEP_PORTS
-    vcpkg --triplet $triplet upgrade $DEP_PORT_NAMES --no-dry-run
+        vcpkg --triplet $triplet install --no-binarycaching --recurse --keep-going $DEP_PORTS
+        vcpkg --triplet $triplet upgrade --no-binarycaching $DEP_PORT_NAMES --no-dry-run
 
-    $build_dir = join-path $repo_path build-$triplet
+        $build_dir = join-path $repo_path build-$triplet
 
-    ni -it dir $build_dir   -ea ignore | out-null
-    ri -r -fo  $build_dir/* -ea ignore
+        ni -it dir $build_dir   -ea ignore | out-null
+        ri -r -fo  $build_dir/* -ea ignore
 
-    pushd $build_dir
+        pushd $build_dir
 
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET="$triplet" -DUPSTREAM_RELEASE=TRUE -G Ninja
-    ninja
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET="$triplet" -DUPSTREAM_RELEASE=TRUE -G Ninja
+        ninja
 
-    popd
+        popd
+    }
 }
 
 teardown_build_env
 
 # Do full upgrade of all deps, repeat for the MinGW triplets because the toolchain has to be in $env:PATH.
-vcpkg upgrade --no-dry-run
+vcpkg upgrade --no-binarycaching --no-dry-run
 
 foreach ($triplet in (write x86-mingw-static x64-mingw-static)) {
     setup_build_env $triplet
-    vcpkg upgrade --no-dry-run
+    vcpkg upgrade --no-binarycaching --no-dry-run
 }
 
 teardown_build_env

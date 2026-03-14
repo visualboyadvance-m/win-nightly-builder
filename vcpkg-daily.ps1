@@ -5,15 +5,30 @@ $progresspreference    = 'silentlycontinue'
 
 $stage_dir = "$env:TEMP/vbam-daily-packages"
 
-$force_build = if ($args[0] -match '^--?f') { $true} else { $false }
+$packages      = $null
+$filtered_args = [System.Collections.Generic.List[object]]::new()
+for ($i = 0; $i -lt $args.count; $i++) {
+    if     ($args[$i] -match '^--?packages?=(.+)')                        { $packages = $matches[1] -split ',' }
+    elseif ($args[$i] -match '^--?packages?$' -and $i+1 -lt $args.count) { $packages = $args[++$i] -split ',' }
+    else   { $filtered_args.add($args[$i]) }
+}
 
-$build_triplets = $args | get-triplets
+$force_build = if ($filtered_args[0] -match '^--?f') { $true} else { $false }
+
+$build_triplets = get-triplets @filtered_args
+
+if ($packages) {
+    $unknown = $packages | ?{ $_ -notin $DEP_PORT_NAMES }
+    if ($unknown) { write-error "Unknown package(s): $($unknown -join ', ')" -ea stop }
+    $build_ports = $DEP_PORTS | ?{ ($_ -replace '\[[^\]]+\]','') -in $packages }
+} else {
+    $build_ports = $DEP_PORTS
+}
+$build_port_names = $build_ports -replace '\[[^\]]+\]',''
 
 "INFO: vcpkg packages upgrade started on $(date)."
 
-update_vcpkg
-
-if (-not $islinux -and -not ($args -match '^--?no-wx')) {
+if (-not $islinux -and -not ($filtered_args -match '^--?no-wx')) {
     $temp_dir = "$env:TEMP/wx-port-temp"
 
     ni -it dir $temp_dir -ea ignore | out-null
@@ -58,21 +73,7 @@ if (-not $islinux -and -not ($args -match '^--?no-wx')) {
     popd
 }
 
-foreach ($triplet in $build_triplets) {
-    setup_build_env $triplet
-
-    foreach ($port in $DEP_PORTS) {
-        vcpkg --triplet $triplet install --allow-unsupported --recurse --keep-going $port
-    }
-
-    foreach ($port in $DEP_PORT_NAMES) {
-        vcpkg --triplet $triplet upgrade --allow-unsupported --no-dry-run --keep-going $port
-    }
-}
-
-teardown_build_env
-
-# Generate binary packages
+# Build and generate binary packages
 
 ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir -ea ignore | out-null
@@ -80,27 +81,46 @@ ni -it dir $stage_dir -ea ignore | out-null
 pushd $stage_dir
 
 foreach ($triplet in $build_triplets) {
-    ni -it dir $triplet -ea ignore | out-null
-    pushd $triplet
-    vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
-        "Packing $_ for $triplet..."
-        vcpkg-mkpkg "${_}:$triplet"
+    foreach ($tk in $triplet.toolkits) {
+        setup_build_env $triplet $tk
+
+        foreach ($port in $build_ports) {
+            vcpkg --triplet $triplet install --no-binarycaching --allow-unsupported --recurse --keep-going $port
+        }
+
+        foreach ($port in $build_port_names) {
+            vcpkg --triplet $triplet upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
+        }
+
+        $pkg_subdir = if ($tk) { "$triplet/$tk" } else { $triplet }
+        ni -it dir $pkg_subdir -ea ignore | out-null
+        pushd $pkg_subdir
+        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $packages -or $_ -in $build_port_names } | %{
+            "Packing $_ for $triplet$(if ($tk) { " ($tk)" })..."
+            vcpkg-mkpkg "${_}:$triplet"
+        }
+        popd
     }
-    popd
 }
 
+teardown_build_env
+
 foreach ($triplet in $build_triplets) {
-    pushd $triplet
-    $existing_pkgs = 'ls' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/vcpkg/$triplet" 2>$null | select -skip 3 | %{ $_ -replace '^([^_]+).*', '$1' }
-    gci -n *.zip | %{ 
-        $pkg = $_ -replace '^([^_]+).*', '$1'
-        if ($pkg -in $existing_pkgs) {
-            "rm vcpkg/$triplet/${pkg}*" | sftp sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
+    foreach ($tk in $triplet.toolkits) {
+        $pkg_subdir  = if ($tk) { "$triplet/$tk" } else { $triplet }
+        $remote_dir  = "vcpkg/$(if ($tk) { "$triplet/$tk" } else { $triplet })"
+        pushd $pkg_subdir
+        $existing_pkgs = 'ls' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | select -skip 3 | %{ $_ -replace '^([^_]+).*', '$1' }
+        gci -n *.zip | %{
+            $pkg = $_ -replace '^([^_]+).*', '$1'
+            if ($pkg -in $existing_pkgs) {
+                "rm $remote_dir/${pkg}*" | sftp sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
+            }
+            ("put {0} {1} `n chmod 664 {1}" -f $_,"$remote_dir/$_") | `
+                sftp sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
         }
-        ("put {0} {1} `n chmod 664 {1}" -f $_,"vcpkg/$triplet/$_") | `
-            sftp sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
+        popd
     }
-    popd
 }
 
 popd
