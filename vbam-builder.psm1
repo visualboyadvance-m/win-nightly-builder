@@ -21,8 +21,8 @@ $TRIPLETS       = if ($iswindows) {
 		      'x64-osx','arm64-osx'
 		  }
 
-if ((test-path '/program files/git/cmd') -and ($env:PATH -notmatch '[/\\]git[/\\]cmd')) {
-    $env:PATH += ';' + (resolve-path '/program files/git/cmd')
+if ((test-path '/program files/git/cmd') -and ($env:Path -notmatch '[/\\]git[/\\]cmd')) {
+    $env:Path += ';' + (resolve-path '/program files/git/cmd')
 }
 
 if (-not $env:VCPKG_ROOT) {
@@ -61,6 +61,7 @@ function restore_env {
 }
 
 $script:vsenv_state = $null
+$script:vsenv_vcpkg_in_path = $null
 
 if ($iswindows) {
     # Load VS env only once.
@@ -130,13 +131,29 @@ if ($iswindows) {
             # that already has a vsenv'd PATH from its parent process.
             $vs_strip_re = '[/\\]Microsoft Visual Studio[/\\]|[/\\]Microsoft SDKs[/\\]|[/\\]Windows Kits[/\\](?:[^/\\]+[/\\](?:bin|lib|include|UnionMetadata|References)[/\\]|NETFXSDK[/\\])|[/\\]Microsoft\.NET[/\\]|[/\\]HTML Help Workshop'
 
-            # PATH baseline: strip VS-adjacent entries and VCPKG_ROOT (which will be
-            # re-added from new_entries via the \VC\vcpkg replacement).
+            # Strip stale VCPKG_ROOT from PATH if it changed since last vsenv
+            # call — must happen before $post_unload_path AND before vcvarsall
+            # (which inherits $env:Path) so neither sees the old entry.
             $vcpkg_root_trimmed = if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT.trimend('/\') } else { $null }
-            $post_unload_path = ($env:PATH -split $path_sep | ?{
-                $_ -and $_ -inotmatch $vs_strip_re -and
-                (-not $vcpkg_root_trimmed -or $_.trimend('/\') -ine $vcpkg_root_trimmed)
+            if ($script:vsenv_vcpkg_in_path -and $vcpkg_root_trimmed -and
+                $script:vsenv_vcpkg_in_path -ine $vcpkg_root_trimmed) {
+                $env:Path = ($env:Path -split $path_sep | ?{
+                    $_.trim().trimend('/\') -ine $script:vsenv_vcpkg_in_path
+                }) -join $path_sep
+            }
+
+            # PATH baseline: strip VS-adjacent entries, normalize and dedup.
+            $post_unload_dedup = [System.Collections.Generic.HashSet[string]]::new(
+                [System.StringComparer]::OrdinalIgnoreCase)
+            $post_unload_path = ($env:Path -split $path_sep | %{ $_.trim().trimend('/\') } | ?{
+                $_ -and $_ -inotmatch $vs_strip_re -and $post_unload_dedup.add($_)
             }) -join $path_sep
+
+            # Ensure VCPKG_ROOT is in the baseline so -unload preserves it.
+            if ($vcpkg_root_trimmed -and -not $post_unload_dedup.contains($vcpkg_root_trimmed)) {
+                $post_unload_path += $path_sep + $vcpkg_root_trimmed
+            }
+            $script:vsenv_vcpkg_in_path = $vcpkg_root_trimmed
 
             if (-not $arch) { $arch = $default_arch }
 
@@ -204,8 +221,8 @@ if ($iswindows) {
                 $val = $pre_unload[$lv]
                 $saved_lists[$lv] = if ($val -and $prev_additions -and $prev_additions[$lv]) {
                     $added = $prev_additions[$lv]
-                    $clean = $val -split $path_sep | ?{
-                        $_ -and -not $added.contains($_.trim().trimend('\'))
+                    $clean = $val -split $path_sep | %{ $_.trim().trimend('/\') } | ?{
+                        $_ -and -not $added.contains($_)
                     }
                     if ($clean) { $clean -join $path_sep }
                 } else {
@@ -256,27 +273,24 @@ if ($iswindows) {
 
                     $saved = $state.saved_lists[$name]
                     # saved is the user baseline; split into entries for merging.
-                    # Strip VS/SDK/WinKits/.NET paths that may have leaked in, plus
-                    # VCPKG_ROOT from PATH (it will be re-added from new_entries).
-                    $saved_entries = @($saved -split $path_sep | ?{
-                        $_ -and $_ -inotmatch $vs_strip_re -and
-                        (-not ($name -ieq 'PATH' -and $vcpkg_root_trimmed -and $_.trimend('/\') -ieq $vcpkg_root_trimmed))
+                    # Strip VS/SDK/WinKits/.NET paths that may have leaked in.
+                    $saved_entries = @($saved -split $path_sep | %{ $_.trim().trimend('/\') } | ?{
+                        $_ -and $_ -inotmatch $vs_strip_re
                     })
                     # Build a set of all saved entry identities: both resolved path and
-                    # raw string (trimmed), so deduplication works whether or not the
-                    # directory exists and regardless of trailing-backslash differences.
+                    # raw string, so deduplication works whether or not the directory
+                    # exists.  Entries are pre-normalized (trimmed, no trailing slash).
                     $seen = [System.Collections.Generic.HashSet[string]]::new(
                         [System.StringComparer]::OrdinalIgnoreCase)
                     $saved_entries | %{
                         $rp = (resolve-path $_ -ea ignore).path
-                        if ($rp) { [void]$seen.add($rp.trim().trimend('\')) }
-                        [void]$seen.add($_.trim().trimend('\'))
+                        if ($rp) { [void]$seen.add($rp.trim().trimend('/\')) }
+                        [void]$seen.add($_)
                     }
-                    $new_entries = @($value -split $path_sep | %{ $_ -replace '[/\\]{2,}', '\' } | ?{
-                        $norm = $_.trim().trimend('\')
-                        if (-not $norm) { return $false }
-                        $rp   = (resolve-path $norm -ea ignore).path
-                        $check = if ($rp) { $rp.trim().trimend('\') } else { $norm }
+                    $new_entries = @($value -split $path_sep | %{ ($_ -replace '[/\\]{2,}', '\').trim().trimend('/\') } | ?{
+                        if (-not $_) { return $false }
+                        $rp    = (resolve-path $_ -ea ignore).path
+                        $check = if ($rp) { $rp.trim().trimend('/\') } else { $_ }
                         -not $seen.contains($check)
                     })
                     # Replace VS-bundled vcpkg (...\VC\vcpkg) with $env:VCPKG_ROOT.
@@ -295,9 +309,7 @@ if ($iswindows) {
                     # Final deduplication pass (first occurrence wins).
                     $dedup_seen = [System.Collections.Generic.HashSet[string]]::new(
                         [System.StringComparer]::OrdinalIgnoreCase)
-                    $all_entries = @($all_entries | ?{
-                        $dedup_seen.add($_.trim().trimend('\'))
-                    })
+                    $all_entries = @($all_entries | ?{ $dedup_seen.add($_) })
                     if ($all_entries) {
                         set-item -literalpath "env:$name" ($all_entries -join $path_sep)
                     }
@@ -450,10 +462,10 @@ function setup_build_env([string]$triplet, [string]$toolkit = '') {
 
     if ($triplet -match 'mingw') {
 	if ($arch -eq 'x86') {
-	    $env:PATH = 'c:/msys64/mingw32/bin;' + $env:PATH
+	    $env:Path = 'c:/msys64/mingw32/bin;' + $env:Path
 	}
 	elseif ($arch -eq 'x64') {
-	    $env:PATH = 'c:/msys64/clang64/bin;' + $env:PATH
+	    $env:Path = 'c:/msys64/clang64/bin;' + $env:Path
 	}
     }
     else { # MSVC
