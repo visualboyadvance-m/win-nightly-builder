@@ -33,7 +33,7 @@ foreach ($triplet in $build_triplets) {
 
         pushd $build_dir
 
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET="$triplet" -DUPSTREAM_RELEASE=TRUE -G Ninja
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET="$triplet" -DVCPKG_SOURCE_PACKAGES=FALSE -DUPSTREAM_RELEASE=TRUE -G Ninja
 
         popd
     }
