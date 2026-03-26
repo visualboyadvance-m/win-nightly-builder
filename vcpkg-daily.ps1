@@ -6,10 +6,13 @@ $progresspreference    = 'silentlycontinue'
 $stage_dir = "$env:TEMP/vbam-daily-packages"
 
 $packages      = $null
+$skip_packages = @()
 $filtered_args = [System.Collections.Generic.List[object]]::new()
 for ($i = 0; $i -lt $args.count; $i++) {
-    if     ($args[$i] -match '^--?packages?=(.+)')                        { $packages = $matches[1] -split ',' }
-    elseif ($args[$i] -match '^--?packages?$' -and $i+1 -lt $args.count) { $packages = $args[++$i] -split ',' }
+    if     ($args[$i] -match '^--?packages?=(.+)')                             { $packages      = $matches[1] -split ',' }
+    elseif ($args[$i] -match '^--?packages?$'      -and $i+1 -lt $args.count) { $packages      = $args[++$i] -split ',' }
+    elseif ($args[$i] -match '^--?skip-packages?=(.+)')                        { $skip_packages = $matches[1] -split ',' }
+    elseif ($args[$i] -match '^--?skip-packages?$' -and $i+1 -lt $args.count) { $skip_packages = $args[++$i] -split ',' }
     else   { $filtered_args.add($args[$i]) }
 }
 
@@ -23,6 +26,11 @@ if ($packages) {
     $build_ports = $DEP_PORTS | ?{ ($_ -replace '\[[^\]]+\]','') -in $packages }
 } else {
     $build_ports = $DEP_PORTS
+}
+if ($skip_packages) {
+    $unknown = $skip_packages | ?{ $_ -notin $DEP_PORT_NAMES }
+    if ($unknown) { write-error "Unknown skip package(s): $($unknown -join ', ')" -ea stop }
+    $build_ports = $build_ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $skip_packages }
 }
 $build_port_names = $build_ports -replace '\[[^\]]+\]',''
 
@@ -38,7 +46,7 @@ if ($filtered_args -match '^--?no-ffmpeg') {
 
 "INFO: vcpkg packages upgrade started on $(date)."
 
-if (-not $islinux -and -not ($filtered_args -match '^--?no-wx')) {
+if (-not $islinux -and 'wxwidgets' -in $build_port_names) {
     $temp_dir = "$env:TEMP/wx-port-temp"
 
     ni -it dir $temp_dir -ea ignore | out-null
@@ -105,7 +113,7 @@ foreach ($triplet in $build_triplets) {
         $pkg_subdir = if ($tk) { "$triplet/$tk" } else { $triplet }
         ni -it dir $pkg_subdir -ea ignore | out-null
         pushd $pkg_subdir
-        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $packages -or $_ -in $build_port_names } | %{
+        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ $_ -in $build_port_names } | %{
             "Packing $_ for $triplet$(if ($tk) { " ($tk)" })..."
             vcpkg-mkpkg "${_}:$triplet"
         }
