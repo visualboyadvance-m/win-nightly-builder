@@ -34,16 +34,6 @@ if ($skip_packages) {
 }
 $build_port_names = $build_ports -replace '\[[^\]]+\]',''
 
-if ($filtered_args -match '^--?no-wx') {
-    $build_ports      = $build_ports      | ?{ $_ -notmatch '^wxwidgets' }
-    $build_port_names = $build_port_names | ?{ $_ -notmatch '^wxwidgets' }  
-}
-
-if ($filtered_args -match '^--?no-ffmpeg') {
-    $build_ports      = $build_ports      | ?{ $_ -notmatch '^ffmpeg' }
-    $build_port_names = $build_port_names | ?{ $_ -notmatch '^ffmpeg' }
-}
-
 "INFO: vcpkg packages upgrade started on $(date)."
 
 if (-not $islinux -and 'wxwidgets' -in $build_port_names) {
