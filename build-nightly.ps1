@@ -10,7 +10,9 @@ $stage_dir = join-path $env:TEMP   vbam-nightly-build
 
 $force_build = $args | ?{ $_ -match '^--?f' }
 
-$build_triplets = get-triplets @args
+$build_triplets = get-triplets @args | ?{
+    $_ -in 'x64-windows-static','x86-mingw-static','arm64-windows-static'
+}
 
 if (-not (test-path $repo_path)) {
     pushd $REPOS_ROOT
