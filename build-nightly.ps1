@@ -67,48 +67,46 @@ git pull --rebase
 popd
 
 :triplet foreach ($triplet in $build_triplets) {
-    :build foreach ($build_type in 'Release', 'Debug') {
-	$build_dir = "$repo_path/build-$triplet-$build_type"
+    $build_dir = "$repo_path/build-$triplet-$build_type"
 
-	ri -r -fo  $build_dir -ea ignore
-	ni -it dir $build_dir | out-null
+    ri -r -fo  $build_dir -ea ignore
+    ni -it dir $build_dir | out-null
 
-	pushd $build_dir
+    pushd $build_dir
 
-	setup_build_env $triplet
+    setup_build_env $triplet
 
-	$error = $null
+    $error = $null
 
-	$compiler = if ($triplet -match 'mingw') { 'gcc' } else { (get-command cl).source }
+    $compiler = if ($triplet -match 'mingw') { 'gcc' } else { (get-command cl).source }
 
-	$translations_only_str = if ($translations_only) `
-	    { 'TRUE' } else { 'FALSE' };
+    $translations_only_str = if ($translations_only) `
+	{ 'TRUE' } else { 'FALSE' };
 
-	try {
-	    & $CMAKE .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE="$build_type" -DUPSTREAM_RELEASE=TRUE `
-			-DTRANSLATIONS_ONLY="$translations_only_str" -DBUILD_TESTING=FALSE `
-			-DCMAKE_C_COMPILER="$compiler" -DCMAKE_CXX_COMPILER="$compiler" `
-			-G Ninja
+    try {
+	& $CMAKE .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
+		    -DTRANSLATIONS_ONLY="$translations_only_str" -DBUILD_TESTING=FALSE `
+		    -DCMAKE_C_COMPILER="$compiler" -DCMAKE_CXX_COMPILER="$compiler" `
+		    -G Ninja
 
-	    if (-not (test-path build.ninja)) { throw 'cmake failed' }
+	if (-not (test-path build.ninja)) { throw 'cmake failed' }
 
-	    ninja
+	ninja
 
-	    if (-not $?) { throw 'build failed' }
-	}
-	catch { $error = "$psitem" }
+	if (-not $?) { throw 'build failed' }
+    }
+    catch { $error = "$psitem" }
 
-	popd
+    popd
 
-	if ($error) {
-	    teardown_build_env
-	    write-error $error
-	    return
-	}
+    if ($error) {
+	teardown_build_env
+	write-error $error
+	return
+    }
 
-	if ($translations_only) {
-	    break triplet
-	}
+    if ($translations_only) {
+	break triplet
     }
 }
 
