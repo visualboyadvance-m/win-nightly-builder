@@ -67,7 +67,7 @@ git pull --rebase
 popd
 
 :triplet foreach ($triplet in $build_triplets) {
-    $build_dir = "$repo_path/build-$triplet-$build_type"
+    $build_dir = "$repo_path/build-$triplet"
 
     ri -r -fo  $build_dir -ea ignore
     ni -it dir $build_dir | out-null
@@ -117,7 +117,7 @@ ni -it dir $stage_dir | out-null
 
 if (-not $translations_only) {
     foreach ($triplet in $build_triplets) {
-	cpi -fo $repo_path/build-$triplet-*/*.zip $stage_dir
+	cpi -fo $repo_path/build-$triplet/*.zip $stage_dir
     }
 }
 else {
