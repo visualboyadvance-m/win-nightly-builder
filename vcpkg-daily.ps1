@@ -103,7 +103,7 @@ foreach ($triplet in $build_triplets) {
         $pkg_subdir = if ($tk) { "$triplet/$tk" } else { $triplet }
         ni -it dir $pkg_subdir -ea ignore | out-null
         pushd $pkg_subdir
-        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ $_ -in $build_port_names } | %{
+        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $packages -or $_ -in $build_port_names } | %{
             "Packing $_ for $triplet$(if ($tk) { " ($tk)" })..."
             vcpkg-mkpkg "${_}:$triplet"
         }
