@@ -13,6 +13,10 @@ if ($islinux) {
     $DEP_PORTS  = @('gtk3[wayland]') + $DEP_PORTS
 }
 
+if (-not $ismacos) {
+    $DEP_PORTS  = @('vulkan') + $DEP_PORTS
+}
+
 $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
 
 $TRIPLETS       = if ($iswindows) {
