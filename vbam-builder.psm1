@@ -15,6 +15,8 @@ if ($islinux) {
 
 if (-not $ismacos) {
     $DEP_PORTS  = @('vulkan') + $DEP_PORTS
+} else {
+    $DEP_PORTS  = @('moltenvk') + @('vulkan-headers') + $DEP_PORTS
 }
 
 $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
