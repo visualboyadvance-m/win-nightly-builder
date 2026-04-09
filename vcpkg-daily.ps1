@@ -11,8 +11,8 @@ $filtered_args = [System.Collections.Generic.List[object]]::new()
 for ($i = 0; $i -lt $args.count; $i++) {
     if     ($args[$i] -match '^--?packages?=(.+)')                             { $packages      = $matches[1] -split ',' }
     elseif ($args[$i] -match '^--?packages?$'      -and $i+1 -lt $args.count) { $packages      = $args[++$i] -split ',' }
-    elseif ($args[$i] -match '^--?skip-packages?=(.+)')                        { $skip_packages = $matches[1] -split ',' }
-    elseif ($args[$i] -match '^--?skip-packages?$' -and $i+1 -lt $args.count) { $skip_packages = $args[++$i] -split ',' }
+    elseif ($args[$i] -match '^--?skip-?packages?=(.+)')                        { $skip_packages = $matches[1] -split ',' }
+    elseif ($args[$i] -match '^--?skip-?packages?$' -and $i+1 -lt $args.count) { $skip_packages = $args[++$i] -split ',' }
     else   { $filtered_args.add($args[$i]) }
 }
 
