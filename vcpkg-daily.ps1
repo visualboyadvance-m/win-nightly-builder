@@ -108,6 +108,27 @@ foreach ($triplet in $build_triplets) {
             vcpkg-mkpkg "${_}:$triplet"
         }
         popd
+
+        # For cross-compiling triplets, build host-tool dependencies under the
+        # host triplet so they are available as binary packages.
+        $host_t = get_host_triplet
+        if ($host_t -and ($triplet.ToString() -split '-')[0] -ne ($host_t -split '-')[0]) {
+            $installed = vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ $_ -in $build_port_names }
+            if ($installed) {
+                $qualified = @($installed | %{ "${_}:$triplet" })
+                $host_deps = @(vcpkg-listhostdeps @qualified) | ?{ $_ } | select-object -unique
+                if ($host_deps) {
+                    "Building host deps for $host_t (cross target: $triplet)..."
+                    setup_build_env $host_t $tk
+                    foreach ($dep in $host_deps) {
+                        vcpkg --triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
+                    }
+                    foreach ($dep in $host_deps) {
+                        vcpkg --triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
+                    }
+                }
+            }
+        }
     }
 }
 

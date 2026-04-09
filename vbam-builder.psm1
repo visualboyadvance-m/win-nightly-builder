@@ -532,6 +532,12 @@ function get-triplets {
     }
 }
 
+function get_host_triplet {
+    if ($iswindows) { 'x64-windows' }
+    elseif ($islinux) { 'x64-linux' }
+    elseif ($ismacos) { 'x64-osx' }
+}
+
 export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES `
-		    -function setup_build_env,teardown_build_env,get-triplets `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet `
 		    -alias vcpkg
