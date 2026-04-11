@@ -88,6 +88,9 @@ ni -it dir $stage_dir -ea ignore | out-null
 
 pushd $stage_dir
 
+$extra_triplets     = [System.Collections.Generic.List[object]]::new()
+$added_target_hosts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
         setup_build_env $triplet $tk
@@ -109,22 +112,48 @@ foreach ($triplet in $build_triplets) {
         }
         popd
 
-        # For cross-compiling triplets, build host-tool dependencies under the
-        # host triplet so they are available as binary packages.
+        # For cross-compiling triplets, build host-tool dependencies for the
+        # target architecture's native host triplet (e.g. arm64-windows for an
+        # arm64-windows-static target) so they are usable on the target machine.
         $host_t = get_host_triplet
         if ($host_t -and ($triplet.ToString() -split '-')[0] -ne ($host_t -split '-')[0]) {
+            # Derive the native host triplet for the target arch: same OS as
+            # the build host but the target's own architecture.
+            $target_arch   = ($triplet.ToString() -split '-')[0]
+            $host_os       = ($host_t -split '-')[1]
+            $target_host_t = "$target_arch-$host_os"
+
             $installed = vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ $_ -in $build_port_names }
             if ($installed) {
                 $qualified = @($installed | %{ "${_}:$triplet" })
                 $host_deps = @(vcpkg-listhostdeps @qualified) | ?{ $_ } | select-object -unique
                 if ($host_deps) {
-                    "Building host deps for $host_t (cross target: $triplet)..."
-                    setup_build_env $host_t $tk
-                    foreach ($dep in $host_deps) {
-                        vcpkg --triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
+                    $target_host_tks = @(get-triplets @filtered_args "--triplets=$target_host_t")[0].Toolkits
+
+                    foreach ($th_tk in $target_host_tks) {
+                        "Building host deps for $target_host_t$(if ($th_tk) { " ($th_tk)" }) (cross target: $triplet)..."
+                        setup_build_env $target_host_t $th_tk
+                        foreach ($dep in $host_deps) {
+                            vcpkg --triplet $target_host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
+                        }
+                        foreach ($dep in $host_deps) {
+                            vcpkg --triplet $target_host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
+                        }
+
+                        $th_subdir = if ($th_tk) { "$target_host_t/$th_tk" } else { $target_host_t }
+                        ni -it dir $th_subdir -ea ignore | out-null
+                        pushd $th_subdir
+                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
+                            "Packing $_ for $target_host_t$(if ($th_tk) { " ($th_tk)" })..."
+                            vcpkg-mkpkg "${_}:$target_host_t"
+                        }
+                        popd
                     }
-                    foreach ($dep in $host_deps) {
-                        vcpkg --triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
+
+                    if ($added_target_hosts.add($target_host_t)) {
+                        $th_obj = [PSCustomObject]@{ Triplet = $target_host_t; Toolkits = $target_host_tks }
+                        $th_obj | add-member -membertype scriptmethod -name ToString -value { $this.Triplet } -force
+                        $extra_triplets.add($th_obj)
                     }
                 }
             }
@@ -133,6 +162,8 @@ foreach ($triplet in $build_triplets) {
 }
 
 teardown_build_env
+
+$build_triplets = @($build_triplets) + @($extra_triplets)
 
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
