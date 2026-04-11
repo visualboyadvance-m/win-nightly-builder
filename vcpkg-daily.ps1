@@ -90,11 +90,14 @@ pushd $stage_dir
 
 $extra_triplets     = [System.Collections.Generic.List[object]]::new()
 $added_target_hosts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$throttle           = [System.Environment]::ProcessorCount
+$binpkg_module      = $null
 
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
         setup_build_env $triplet $tk
 
+        $binpkg_module ??= (get-module vcpkg-binpkg).path
         $host_t = get_host_triplet
 
         foreach ($port in $build_ports) {
@@ -107,12 +110,14 @@ foreach ($triplet in $build_triplets) {
 
         $pkg_subdir = if ($tk) { "$triplet/$tk" } else { $triplet }
         ni -it dir $pkg_subdir -ea ignore | out-null
-        pushd $pkg_subdir
-        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $packages -or $_ -in $build_port_names } | %{
-            "Packing $_ for $triplet$(if ($tk) { " ($tk)" })..."
-            vcpkg-mkpkg "${_}:$triplet"
+        $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
+        $triplet_s      = "$triplet"
+        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $packages -or $_ -in $build_port_names } | ForEach-Object -ThrottleLimit $throttle -Parallel {
+            import-module $using:binpkg_module
+            set-location $using:pkg_subdir_abs
+            "Packing $_ for $($using:triplet_s)$(if ($using:tk) { " ($($using:tk))" })..."
+            vcpkg-mkpkg "${_}:$($using:triplet_s)"
         }
-        popd
 
         # For cross-compiling triplets, build host-tool dependencies for the
         # target architecture's native host triplet (e.g. arm64-windows for an
@@ -143,12 +148,13 @@ foreach ($triplet in $build_triplets) {
 
                         $th_subdir = if ($th_tk) { "$target_host_t/$th_tk" } else { $target_host_t }
                         ni -it dir $th_subdir -ea ignore | out-null
-                        pushd $th_subdir
-                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
-                            "Packing $_ for $target_host_t$(if ($th_tk) { " ($th_tk)" })..."
-                            vcpkg-mkpkg "${_}:$target_host_t"
+                        $th_subdir_abs = join-path $stage_dir $th_subdir
+                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | ForEach-Object -ThrottleLimit $throttle -Parallel {
+                            import-module $using:binpkg_module
+                            set-location $using:th_subdir_abs
+                            "Packing $_ for $($using:target_host_t)$(if ($using:th_tk) { " ($($using:th_tk))" })..."
+                            vcpkg-mkpkg "${_}:$($using:target_host_t)"
                         }
-                        popd
                     }
 
                     if ($added_target_hosts.add($target_host_t)) {
@@ -170,17 +176,24 @@ foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
         $pkg_subdir  = if ($tk) { "$triplet/$tk" } else { $triplet }
         $remote_dir  = "vcpkg/$(if ($tk) { "$triplet/$tk" } else { $triplet })"
-        pushd $pkg_subdir
+        $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
         $existing_pkgs = 'ls' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | select -skip 3 | %{ $_ -replace '^([^_]+).*', '$1' }
-        gci -n *.zip | %{
-            $pkg = $_ -replace '^([^_]+).*', '$1'
-            if ($pkg -in $existing_pkgs) {
-                "rm $remote_dir/${pkg}*" | sftp sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
+        gci $pkg_subdir_abs -filter '*.zip' | ForEach-Object -ThrottleLimit 3 -Parallel {
+            $zip_name = $_.Name
+            $zip_full = $_.FullName
+            $pkg      = $zip_name -replace '^([^_]+).*', '$1'
+            $rdir     = $using:remote_dir
+
+            $batch = new-temporaryfile
+            if ($pkg -in $using:existing_pkgs) {
+                add-content $batch "rm $rdir/${pkg}_*"
             }
-            ("put {0} {1} `n chmod 664 {1}" -f $_,"$remote_dir/$_") | `
-                sftp sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
+            add-content $batch "put $zip_full $rdir/$zip_name"
+            add-content $batch "chmod 664 $rdir/$zip_name"
+
+            sftp -b $batch sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
+            remove-item $batch
         }
-        popd
     }
 }
 
