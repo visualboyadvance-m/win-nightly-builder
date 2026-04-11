@@ -95,12 +95,14 @@ foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
         setup_build_env $triplet $tk
 
+        $host_t = get_host_triplet
+
         foreach ($port in $build_ports) {
-            vcpkg --triplet $triplet install --no-binarycaching --allow-unsupported --recurse --keep-going $port
+            vcpkg --triplet $triplet --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $port
         }
 
         foreach ($port in $build_port_names) {
-            vcpkg --triplet $triplet upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
+            vcpkg --triplet $triplet --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
         }
 
         $pkg_subdir = if ($tk) { "$triplet/$tk" } else { $triplet }
@@ -115,7 +117,6 @@ foreach ($triplet in $build_triplets) {
         # For cross-compiling triplets, build host-tool dependencies for the
         # target architecture's native host triplet (e.g. arm64-windows for an
         # arm64-windows-static target) so they are usable on the target machine.
-        $host_t = get_host_triplet
         if ($host_t -and ($triplet.ToString() -split '-')[0] -ne ($host_t -split '-')[0]) {
             # Derive the native host triplet for the target arch: same OS as
             # the build host but the target's own architecture.
@@ -134,10 +135,10 @@ foreach ($triplet in $build_triplets) {
                         "Building host deps for $target_host_t$(if ($th_tk) { " ($th_tk)" }) (cross target: $triplet)..."
                         setup_build_env $target_host_t $th_tk
                         foreach ($dep in $host_deps) {
-                            vcpkg --triplet $target_host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
+                            vcpkg --triplet $target_host_t --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
                         }
                         foreach ($dep in $host_deps) {
-                            vcpkg --triplet $target_host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
+                            vcpkg --triplet $target_host_t --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
                         }
 
                         $th_subdir = if ($th_tk) { "$target_host_t/$th_tk" } else { $target_host_t }

@@ -533,9 +533,14 @@ function get-triplets {
 }
 
 function get_host_triplet {
-    if ($iswindows) { 'x64-windows' }
-    elseif ($islinux) { 'x64-linux' }
-    elseif ($ismacos) { 'x64-osx' }
+    $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
+        'Arm64' { 'arm64' }
+        'X64'   { 'x64' }
+        default { 'x64' }
+    }
+    if ($iswindows) { "$arch-windows" }
+    elseif ($islinux) { "$arch-linux" }
+    elseif ($ismacos) { "$arch-osx" }
 }
 
 export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES `
