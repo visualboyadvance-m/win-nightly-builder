@@ -69,7 +69,7 @@ if (-not $islinux -and 'wxwidgets' -in $build_port_names) {
                 $matches.4 } `
             else { $_ }) } | set-content wxwidgets/vcpkg.json
 
-        git commit -a -m "wxwidgets: update master hash + bump ver" --signoff -S
+        git commit -a -m "wxwidgets: update master hash + bump ver" --signoff
 
         git push
 
