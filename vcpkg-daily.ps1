@@ -7,13 +7,13 @@ $stage_dir = "$env:TEMP/vbam-daily-packages"
 
 $packages      = $null
 $skip_packages = @()
-$filtered_args = [System.Collections.Generic.List[object]]::new()
+$filtered_args = @()
 for ($i = 0; $i -lt $args.count; $i++) {
     if     ($args[$i] -match '^--?packages?=(.+)')                             { $packages      = $matches[1] -split ',' }
     elseif ($args[$i] -match '^--?packages?$'      -and $i+1 -lt $args.count) { $packages      = $args[++$i] -split ',' }
     elseif ($args[$i] -match '^--?skip-?packages?=(.+)')                        { $skip_packages = $matches[1] -split ',' }
     elseif ($args[$i] -match '^--?skip-?packages?$' -and $i+1 -lt $args.count) { $skip_packages = $args[++$i] -split ',' }
-    else   { $filtered_args.add($args[$i]) }
+    else   { $filtered_args += $args[$i] }
 }
 
 $force_build = if ($filtered_args[0] -match '^--?f') { $true} else { $false }
@@ -88,8 +88,8 @@ ni -it dir $stage_dir -ea ignore | out-null
 
 pushd $stage_dir
 
-$extra_triplets     = [System.Collections.Generic.List[object]]::new()
-$added_target_hosts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$extra_triplets     = @()
+$added_target_hosts = @{}
 $throttle           = [System.Environment]::ProcessorCount
 $binpkg_module      = $null
 
@@ -157,10 +157,11 @@ foreach ($triplet in $build_triplets) {
                         }
                     }
 
-                    if ($added_target_hosts.add($target_host_t)) {
+                    if (-not $added_target_hosts[$target_host_t]) {
+                        $added_target_hosts[$target_host_t] = $true
                         $th_obj = [PSCustomObject]@{ Triplet = $target_host_t; Toolkits = $target_host_tks }
                         $th_obj | add-member -membertype scriptmethod -name ToString -value { $this.Triplet } -force
-                        $extra_triplets.add($th_obj)
+                        $extra_triplets += $th_obj
                     }
                 }
             }

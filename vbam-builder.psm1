@@ -101,7 +101,7 @@ if ($iswindows) {
             # Capture current list var values BEFORE unloading.  For
             # LIB/INCLUDE/LIBPATH this preserves user additions (e.g. vcpkg)
             # that were appended after the previous vsenv call.
-            $pre_unload = [hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $pre_unload = @{}
             foreach ($lv in $list_vars) {
                 $pre_unload[$lv] = (get-item -literalpath "env:$lv" -ea ignore).value
             }
@@ -151,14 +151,13 @@ if ($iswindows) {
             }
 
             # PATH baseline: strip VS-adjacent entries, normalize and dedup.
-            $post_unload_dedup = [System.Collections.Generic.HashSet[string]]::new(
-                [System.StringComparer]::OrdinalIgnoreCase)
+            $post_unload_dedup = @{}
             $post_unload_path = ($env:Path -split $path_sep | %{ $_.trim().trimend('/\') } | ?{
-                $_ -and $_ -inotmatch $vs_strip_re -and $post_unload_dedup.add($_)
+                $_ -and $_ -inotmatch $vs_strip_re -and -not $post_unload_dedup[$_] -and ($post_unload_dedup[$_] = $true)
             }) -join $path_sep
 
             # Ensure VCPKG_ROOT is in the baseline so -unload preserves it.
-            if ($vcpkg_root_trimmed -and -not $post_unload_dedup.contains($vcpkg_root_trimmed)) {
+            if ($vcpkg_root_trimmed -and -not $post_unload_dedup[$vcpkg_root_trimmed]) {
                 $post_unload_path += $path_sep + $vcpkg_root_trimmed
             }
             $script:vsenv_vcpkg_in_path = $vcpkg_root_trimmed
@@ -223,14 +222,14 @@ if ($iswindows) {
             # LIB/INCLUDE/LIBPATH: start from pre-unload (which has user additions
             # like vcpkg), then subtract what vcvarsall added last time so that
             # arch-specific VS/WinKits entries don't carry over across arch switches.
-            $saved_lists = [hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $saved_lists = @{}
             $saved_lists['PATH'] = $post_unload_path
             foreach ($lv in $list_vars | ?{ $_ -ine 'PATH' }) {
                 $val = $pre_unload[$lv]
                 $saved_lists[$lv] = if ($val -and $prev_additions -and $prev_additions[$lv]) {
                     $added = $prev_additions[$lv]
                     $clean = $val -split $path_sep | %{ $_.trim().trimend('/\') } | ?{
-                        $_ -and -not $added.contains($_)
+                        $_ -and -not $added[$_]
                     }
                     if ($clean) { $clean -join $path_sep }
                 } else {
@@ -259,7 +258,7 @@ if ($iswindows) {
             $state = @{
                 saved_lists         = $saved_lists
                 vars                = @{}
-                vcvarsall_additions = [hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+                vcvarsall_additions = @{}
             }
 
             $output | ?{ $_ -match '^([^=]+)=(.*)$' } | %{
@@ -270,11 +269,10 @@ if ($iswindows) {
                     # Record everything vcvarsall outputs for LIB/INCLUDE/LIBPATH so
                     # the next call can subtract these arch-specific entries from pre_unload.
                     if ($name -ine 'PATH') {
-                        $vc_set = [System.Collections.Generic.HashSet[string]]::new(
-                            [System.StringComparer]::OrdinalIgnoreCase)
+                        $vc_set = @{}
                         $value -split $path_sep | %{
                             $n = ($_ -replace '[/\\]{2,}', '\').trim().trimend('\')
-                            if ($n) { [void]$vc_set.add($n) }
+                            if ($n) { $vc_set[$n] = $true }
                         }
                         $state.vcvarsall_additions[$name] = $vc_set
                     }
@@ -288,18 +286,17 @@ if ($iswindows) {
                     # Build a set of all saved entry identities: both resolved path and
                     # raw string, so deduplication works whether or not the directory
                     # exists.  Entries are pre-normalized (trimmed, no trailing slash).
-                    $seen = [System.Collections.Generic.HashSet[string]]::new(
-                        [System.StringComparer]::OrdinalIgnoreCase)
+                    $seen = @{}
                     $saved_entries | %{
                         $rp = (resolve-path $_ -ea ignore).path
-                        if ($rp) { [void]$seen.add($rp.trim().trimend('/\')) }
-                        [void]$seen.add($_)
+                        if ($rp) { $seen[$rp.trim().trimend('/\')] = $true }
+                        $seen[$_] = $true
                     }
                     $new_entries = @($value -split $path_sep | %{ ($_ -replace '[/\\]{2,}', '\').trim().trimend('/\') } | ?{
                         if (-not $_) { return $false }
                         $rp    = (resolve-path $_ -ea ignore).path
                         $check = if ($rp) { $rp.trim().trimend('/\') } else { $_ }
-                        -not $seen.contains($check)
+                        -not $seen[$check]
                     })
                     # Replace VS-bundled vcpkg (...\VC\vcpkg) with $env:VCPKG_ROOT.
                     if ($name -ieq 'PATH' -and $env:VCPKG_ROOT) {
@@ -315,9 +312,8 @@ if ($iswindows) {
                         @($new_entries) + @($saved_entries)
                     }
                     # Final deduplication pass (first occurrence wins).
-                    $dedup_seen = [System.Collections.Generic.HashSet[string]]::new(
-                        [System.StringComparer]::OrdinalIgnoreCase)
-                    $all_entries = @($all_entries | ?{ $dedup_seen.add($_) })
+                    $dedup_seen = @{}
+                    $all_entries = @($all_entries | ?{ -not $dedup_seen[$_] -and ($dedup_seen[$_] = $true) })
                     if ($all_entries) {
                         set-item -literalpath "env:$name" ($all_entries -join $path_sep)
                     }
@@ -418,7 +414,7 @@ function update_vcpkg([string]$toolkit = '') {
 $script:current_arch      = $null
 $script:current_toolchain = $null
 $script:current_toolkit   = $null
-$script:updated_toolkits  = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$script:updated_toolkits  = @{}
 
 function rewrite_vcpkg_root([string]$old_root, [string]$new_root) {
     set-alias -force -scope global vcpkg (join-path $new_root $(if ($iswindows) { 'vcpkg.exe' } else { 'vcpkg' }))
@@ -447,7 +443,8 @@ function setup_build_env([string]$triplet, [string]$toolkit = '') {
     $arch      = $matches[1]
     $toolchain = $matches[2]
 
-    if ($script:updated_toolkits.add($toolkit)) {
+    if (-not $script:updated_toolkits[$toolkit]) {
+        $script:updated_toolkits[$toolkit] = $true
         update_vcpkg $toolkit
     }
 
