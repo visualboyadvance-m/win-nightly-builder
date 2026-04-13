@@ -122,7 +122,7 @@ foreach ($triplet in $build_triplets) {
         # For cross-compiling triplets, build host-tool dependencies for the
         # target architecture's native host triplet (e.g. arm64-windows for an
         # arm64-windows-static target) so they are usable on the target machine.
-        if ($host_t -and ($triplet.ToString() -split '-')[0] -ne ($host_t -split '-')[0]) {
+        if (-not $packages -and $host_t -and ($triplet -split '-')[0] -ne ($host_t -split '-')[0]) {
             # Derive the native host triplet for the target arch: same OS as
             # the build host but the target's own architecture.
             $target_arch   = ($triplet.ToString() -split '-')[0]
