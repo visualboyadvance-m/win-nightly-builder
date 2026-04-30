@@ -7,7 +7,7 @@ $ROOT           = $(if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } e
 
 $REPOS_ROOT     = $ROOT + '/source/repos'
 
-$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' pthreads 'sdl3[vulkan]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft 'ffmpeg[x264,x265]'
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft 'ffmpeg[x264,x265]'
 
 if ($islinux) {
     $DEP_PORTS  = @('gtk3[wayland]') + $DEP_PORTS
