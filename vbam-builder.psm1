@@ -497,8 +497,10 @@ function get-triplets {
     for ($i = 0; $i -lt $args.count; $i++) {
         if     ($args[$i] -match '^--?toolkit=(.+)')                         { $toolkit = $matches[1] }
         elseif ($args[$i] -match '^--?toolkit$'  -and $i+1 -lt $args.count) { $toolkit = $args[++$i] }
-        elseif ($args[$i] -match '^--?triplets?=(.+)')                        { $triplet_args = $matches[1] -split ',' }
-        elseif ($args[$i] -match '^--?triplets?$' -and $i+1 -lt $args.count) { $triplet_args = $args[++$i] -split ',' }
+        elseif ($args[$i] -match '^--?triplets?=(.+)')                       { $triplet_args = @($matches[1] -split '[,\s]+' | ?{ $_ }) }
+        elseif ($args[$i] -match '^--?triplets?$') {
+            while ($i+1 -lt $args.count -and $args[$i+1] -notmatch '^-') { $triplet_args += $args[++$i] -split '[,\s]+' | ?{ $_ } }
+        }
     }
 
     $requested_triplets = $triplet_args | %{ $_.tolower() } | %{

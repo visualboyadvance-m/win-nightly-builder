@@ -9,10 +9,16 @@ $packages      = $null
 $skip_packages = @()
 $filtered_args = @()
 for ($i = 0; $i -lt $args.count; $i++) {
-    if     ($args[$i] -match '^--?packages?=(.+)')                             { $packages      = $matches[1] -split ',' }
-    elseif ($args[$i] -match '^--?packages?$'      -and $i+1 -lt $args.count) { $packages      = $args[++$i] -split ',' }
-    elseif ($args[$i] -match '^--?skip-?packages?=(.+)')                        { $skip_packages = $matches[1] -split ',' }
-    elseif ($args[$i] -match '^--?skip-?packages?$' -and $i+1 -lt $args.count) { $skip_packages = $args[++$i] -split ',' }
+    if     ($args[$i] -match '^--?packages?=(.+)')          { $packages      = @($matches[1] -split '[,\s]+' | ?{ $_ }) }
+    elseif ($args[$i] -match '^--?packages?$')              {
+        $packages = @()
+        while ($i+1 -lt $args.count -and $args[$i+1] -notmatch '^-') { $packages += $args[++$i] -split '[,\s]+' | ?{ $_ } }
+    }
+    elseif ($args[$i] -match '^--?skip-?packages?=(.+)')    { $skip_packages = @($matches[1] -split '[,\s]+' | ?{ $_ }) }
+    elseif ($args[$i] -match '^--?skip-?packages?$')        {
+        $skip_packages = @()
+        while ($i+1 -lt $args.count -and $args[$i+1] -notmatch '^-') { $skip_packages += $args[++$i] -split '[,\s]+' | ?{ $_ } }
+    }
     else   { $filtered_args += $args[$i] }
 }
 
