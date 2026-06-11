@@ -13,9 +13,11 @@ if ($islinux) {
     $DEP_PORTS  = @('gtk3[wayland]') + $DEP_PORTS
 }
 
-if (-not $ismacos) {
+if ($iswindows) {
     $DEP_PORTS  = @('vulkan') + $DEP_PORTS
-} else {
+} elseif ($islinux) {
+    $DEP_PORTS  = @('vulkan') + @('vulkan-loader[wayland,xlib,xcb]') + $DEP_PORTS
+} elseif ($ismacos) {
     $DEP_PORTS  = @('vulkan-headers') + @('moltenvk') + $DEP_PORTS
 }
 
