@@ -74,7 +74,12 @@ popd
 
     pushd $build_dir
 
-    setup_build_env $triplet
+    if ($triplet -match 'x64-windows') {
+	setup_build_env $triplet v143
+    }
+    else {
+	setup_build_env $triplet
+    }
 
     $error = $null
 
