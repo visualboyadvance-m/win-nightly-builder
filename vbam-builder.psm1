@@ -31,8 +31,17 @@ $TRIPLETS       = if ($iswindows) {
 		      'x64-osx','arm64-osx'
 		  }
 
-if ((test-path '/program files/git/cmd') -and ($env:Path -notmatch '[/\\]git[/\\]cmd')) {
-    $env:Path += ';' + (resolve-path '/program files/git/cmd')
+if ($iswindows) {
+    $git_bin_dir   = '/progra~1/git/cmd'
+    $cmake_bin_dir = '/progra~1/cmake/bin'
+
+    if ((test-path $git_bin_dir)   -and ($env:Path -notmatch '[/\\]git[/\\]cmd')) {
+        $env:Path += ';' + (resolve-path $git_bin_dir).path
+    }
+
+    if ((test-path $cmake_bin_dir) -and ($env:Path -notmatch '[/\\]cmake[/\\]bin')) {
+        $env:Path = (resolve-path $cmake_bin_dir).path + ';' + $env:Path
+    }
 }
 
 if (-not $env:VCPKG_ROOT) {

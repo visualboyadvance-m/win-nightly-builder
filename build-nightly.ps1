@@ -3,8 +3,6 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 $erroractionpreference = 'stop'
 $progresspreference    = 'silentlycontinue'
 
-$CMAKE = if ($iswindows) { '/progra~1/cmake/bin/cmake.exe' } else { 'cmake' }
-
 $repo_path = join-path $REPOS_ROOT visualboyadvance-m-nightly
 $stage_dir = join-path $env:TEMP   vbam-nightly-build
 
@@ -89,11 +87,11 @@ popd
 	{ 'TRUE' } else { 'FALSE' };
 
     try {
-	& $CMAKE .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
-		    -DENABLE_OPENAL=FALSE `
-		    -DTRANSLATIONS_ONLY="$translations_only_str" -DBUILD_TESTING=FALSE `
-		    -DCMAKE_C_COMPILER="$compiler" -DCMAKE_CXX_COMPILER="$compiler" `
-		    -G Ninja
+	& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
+		   -DENABLE_OPENAL=FALSE `
+		   -DTRANSLATIONS_ONLY="$translations_only_str" -DBUILD_TESTING=FALSE `
+		   -DCMAKE_C_COMPILER="$compiler" -DCMAKE_CXX_COMPILER="$compiler" `
+		   -G Ninja
 
 	if (-not (test-path build.ninja)) { throw 'cmake failed' }
 
