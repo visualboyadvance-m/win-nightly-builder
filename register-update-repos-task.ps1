@@ -14,14 +14,15 @@ $action  = new-scheduledtaskaction `
 	"-command ""& '$(join-path $psscriptroot update-repos.ps1)'""" + `
 	" *>> $ROOT/logs/update-repos.log")
 
-$password = (get-credential $env:username).getnetworkcredential().password
+$principal = new-scheduledtaskprincipal `
+    -userid $env:USERNAME `
+    -logontype s4u `
+    -runlevel highest
 
 register-scheduledtask -force `
     -taskname $taskname `
     -trigger $trigger -action $action `
-    -user $env:username `
-    -password $password `
-    -runlevel highest `
+    -principal $principal `
     -ea stop | out-null
 
 "Task '$taskname' successfully registered to run hourly."

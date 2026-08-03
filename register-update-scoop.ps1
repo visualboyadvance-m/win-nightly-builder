@@ -2,7 +2,7 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 
 $erroractionpreference = 'stop'
 
-$taskname = 'VBAM winget Nightly Upgrade'
+$taskname = 'VBAM scoop Nightly Upgrade'
 $runat    = '10:00'
 
 $trigger = new-scheduledtasktrigger -at $runat -daily
