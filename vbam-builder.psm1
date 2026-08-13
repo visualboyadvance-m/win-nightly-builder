@@ -3,6 +3,23 @@
 [console]::outputencoding = [console]::inputencoding = `
     $outputencoding = new-object system.text.utf8encoding
 
+# Windows PowerShell does not have OS automatic variables.
+if (-not (test-path variable:global:iswindows)) {
+    $global:IsWindows = $false
+    $global:IsLinux   = $false
+    $global:IsMacOS   = $false
+
+    if (get-command get-cimsession -ea ignore) {
+        $global:IsWindows = $true
+    }
+    elseif (test-path /System/Library/Extensions) {
+        $global:IsMacOS   = $true
+    }
+    else {
+        $global:IsLinux   = $true
+    }
+}
+
 $ROOT           = $(if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME })
 
 $REPOS_ROOT     = $ROOT + '/source/repos'

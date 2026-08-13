@@ -10,7 +10,7 @@ $trigger = new-scheduledtasktrigger -at $runat -daily
 if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
 
 $action  = new-scheduledtaskaction `
-    -execute 'pwsh' `
+    -execute "$env:systemroot\System32\WindowsPowerShell\v1.0\powershell.exe" `
     -argument ("-noprofile -executionpolicy remotesigned " + `
 	"-command ""& '$(join-path $psscriptroot build-nightly.ps1)' --triplets x64-windows-static x86-mingw-static""" + `
 	" *>> $ROOT/logs/build-nightly-intel.log")

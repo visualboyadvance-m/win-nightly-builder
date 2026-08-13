@@ -63,7 +63,7 @@ if (-not $islinux -and 'wxwidgets' -in $build_port_names) {
         @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
 
         $wx_master_ver = (
-            iwr https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
+            iwr -usebasicparsing https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
             sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
         ).matches.groups[1].value
 
@@ -102,7 +102,7 @@ foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
         setup_build_env $triplet $tk
 
-        $binpkg_module ??= (get-module vcpkg-binpkg).path
+        if (-not $binpkg_module) { $binpkg_module = (get-module vcpkg-binpkg).path }
         $host_t = get_host_triplet
 
         foreach ($port in $build_ports) {
@@ -117,12 +117,15 @@ foreach ($triplet in $build_triplets) {
         ni -it dir $pkg_subdir -ea ignore | out-null
         $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
         $triplet_s      = "$triplet"
-        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $packages -or $_ -in $build_port_names } | ForEach-Object -ThrottleLimit $throttle -Parallel {
-            import-module $using:binpkg_module
-            set-location $using:pkg_subdir_abs
-            "Packing $_ for $($using:triplet_s)$(if ($using:tk) { " ($($using:tk))" })..."
-            vcpkg-mkpkg "${_}:$($using:triplet_s)"
-        }
+        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $packages -or $_ -in $build_port_names } | %{
+            start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
+                param($_)
+                import-module $using:binpkg_module
+                set-location $using:pkg_subdir_abs
+                "Packing $_ for $($using:triplet_s)$(if ($using:tk) { " ($($using:tk))" })..."
+                vcpkg-mkpkg "${_}:$($using:triplet_s)"
+            }
+        } | receive-job -wait -autoremovejob
 
         # For cross-compiling triplets, build host-tool dependencies for the
         # target architecture's native host triplet (e.g. arm64-windows for an
@@ -154,12 +157,15 @@ foreach ($triplet in $build_triplets) {
                         $th_subdir = if ($th_tk) { "$target_host_t/$th_tk" } else { $target_host_t }
                         ni -it dir $th_subdir -ea ignore | out-null
                         $th_subdir_abs = join-path $stage_dir $th_subdir
-                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | ForEach-Object -ThrottleLimit $throttle -Parallel {
-                            import-module $using:binpkg_module
-                            set-location $using:th_subdir_abs
-                            "Packing $_ for $($using:target_host_t)$(if ($using:th_tk) { " ($($using:th_tk))" })..."
-                            vcpkg-mkpkg "${_}:$($using:target_host_t)"
-                        }
+                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
+                            start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
+                                param($_)
+                                import-module $using:binpkg_module
+                                set-location $using:th_subdir_abs
+                                "Packing $_ for $($using:target_host_t)$(if ($using:th_tk) { " ($($using:th_tk))" })..."
+                                vcpkg-mkpkg "${_}:$($using:target_host_t)"
+                            }
+                        } | receive-job -wait -autoremovejob
                     }
 
                     if (-not $added_target_hosts[$target_host_t]) {
@@ -184,22 +190,25 @@ foreach ($triplet in $build_triplets) {
         $remote_dir  = "vcpkg/$(if ($tk) { "$triplet/$tk" } else { $triplet })"
         $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
         $existing_pkgs = 'ls' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | select -skip 3 | %{ $_ -replace '^([^_]+).*', '$1' }
-        gci $pkg_subdir_abs -filter '*.zip' | ForEach-Object -ThrottleLimit 3 -Parallel {
-            $zip_name = $_.Name
-            $zip_full = $_.FullName
-            $pkg      = $zip_name -replace '^([^_]+).*', '$1'
-            $rdir     = $using:remote_dir
+        gci $pkg_subdir_abs -filter '*.zip' | %{
+            start-threadjob -throttlelimit 3 -argumentlist $_ -scriptblock {
+                param($_)
+                $zip_name = $_.Name
+                $zip_full = $_.FullName
+                $pkg      = $zip_name -replace '^([^_]+).*', '$1'
+                $rdir     = $using:remote_dir
 
-            $batch = new-temporaryfile
-            if ($pkg -in $using:existing_pkgs) {
-                add-content $batch "rm $rdir/${pkg}_*"
+                $batch = new-temporaryfile
+                if ($pkg -in $using:existing_pkgs) {
+                    add-content $batch "rm $rdir/${pkg}_*"
+                }
+                add-content $batch "put $zip_full $rdir/$zip_name"
+                add-content $batch "chmod 664 $rdir/$zip_name"
+
+                sftp -b $batch sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
+                remove-item $batch
             }
-            add-content $batch "put $zip_full $rdir/$zip_name"
-            add-content $batch "chmod 664 $rdir/$zip_name"
-
-            sftp -b $batch sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
-            remove-item $batch
-        }
+        } | receive-job -wait -autoremovejob
     }
 }
 

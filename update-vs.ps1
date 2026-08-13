@@ -2,7 +2,7 @@ date
 
 'UPDATING Visual Studio'
 
-iwr https://aka.ms/vs/stable/vs_community.exe -outfile "$env:TEMP/vs_community.exe"
+iwr -usebasicparsing https://aka.ms/vs/stable/vs_community.exe -outfile "$env:TEMP/vs_community.exe"
 
 & "$env:TEMP/vs_community.exe" update --passive --norestart
 
