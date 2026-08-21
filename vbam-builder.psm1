@@ -27,7 +27,10 @@ $REPOS_ROOT     = $ROOT + '/source/repos'
 $DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft 'ffmpeg[x264,x265]'
 
 if ($islinux) {
-    $DEP_PORTS  = @('gtk3[wayland]') + $DEP_PORTS
+    # tiff only arrives transitively here, via wxwidgets and gdk-pixbuf. Build
+    # it explicitly so it is upgraded by name along with the rest, and so the
+    # vcpkg copy is in place before anything that links it.
+    $DEP_PORTS  = @('gtk3[wayland]', 'tiff') + $DEP_PORTS
 }
 
 if ($iswindows) {
