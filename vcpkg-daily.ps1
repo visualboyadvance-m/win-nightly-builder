@@ -49,6 +49,15 @@ $selected_port_names = @($build_triplets | %{ selected_ports $_ }) -replace '\[[
 
 "INFO: vcpkg packages upgrade started on $(date)."
 
+# set-content ends lines the way the platform does, so a Windows builder
+# rewriting a port file turns every line of it CRLF: the whole file reads as
+# changed, and the overlay ends up carrying both endings depending on which
+# builder got to the update first. Write LF whatever the platform, which is
+# what the overlay's files are.
+function set_content_lf([string]$path, [string[]]$lines) {
+    [io.file]::WriteAllText((convert-path $path), (($lines -join "`n") + "`n"))
+}
+
 if ('wxwidgets' -in $selected_port_names) {
     $temp_dir = "$env:TEMP/wx-port-temp"
 
@@ -71,20 +80,22 @@ if ('wxwidgets' -in $selected_port_names) {
     git pull --rebase --autostash
 
     if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
-        @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
+        set_content_lf wxwidgets/portfile.cmake `
+            @(gc wxwidgets/portfile.cmake | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" })
 
         $wx_master_ver = (
             iwr -usebasicparsing https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
             sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
         ).matches.groups[1].value
 
-        @(gc .\wxwidgets\vcpkg.json) | %{
-            $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
-                $matches.1 + $wx_master_ver + '-' +
-                $(if ($matches.2 -ne $wx_master_ver) { 1 } `
-                  else { [convert]::toint32($matches.3) + 1 }) +
-                $matches.4 } `
-            else { $_ }) } | set-content wxwidgets/vcpkg.json
+        set_content_lf wxwidgets/vcpkg.json `
+            @(gc wxwidgets/vcpkg.json | %{
+                $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
+                    $matches.1 + $wx_master_ver + '-' +
+                    $(if ($matches.2 -ne $wx_master_ver) { 1 } `
+                      else { [convert]::toint32($matches.3) + 1 }) +
+                    $matches.4 } `
+                else { $_ }) })
 
         git commit -a -m "wxwidgets: update master hash + bump ver" --signoff
 
@@ -259,12 +270,20 @@ foreach ($triplet in $build_triplets) {
                 $pkg      = $zip_name -replace '^([^_]+).*', '$1'
                 $rdir     = $using:remote_dir
 
+                # sftp reads this batch a line at a time, so write LF
+                # whatever the builder: add-content ends lines the platform's
+                # way, and a CR riding along on a put becomes part of the
+                # remote file name. set_content_lf lives in the script scope,
+                # which a thread job's runspace does not see, so write inline.
                 $batch = new-temporaryfile
+                $batch_lines = @()
                 if ($pkg -in $using:existing_pkgs) {
-                    add-content $batch "rm $rdir/${pkg}_*"
+                    $batch_lines += "rm $rdir/${pkg}_*"
                 }
-                add-content $batch "put $zip_full $rdir/$zip_name"
-                add-content $batch "chmod 664 $rdir/$zip_name"
+                $batch_lines += "put $zip_full $rdir/$zip_name"
+                $batch_lines += "chmod 664 $rdir/$zip_name"
+
+                [io.file]::WriteAllText($batch.FullName, (($batch_lines -join "`n") + "`n"))
 
                 sftp -b $batch sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
                 remove-item $batch
