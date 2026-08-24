@@ -14,9 +14,14 @@ $build_triplets = get-triplets @args | ?{
 }
 
 # On Windows this is the grep.exe from Git for Windows, spelled with the
-# extension so it is not taken for a PowerShell command; elsewhere it is plain
-# grep. Behind a variable because the Android builds run on Linux and macOS.
-$grep = if ($iswindows) { 'grep.exe' } else { 'grep' }
+# extension so it is not taken for a PowerShell command; elsewhere it is the
+# binary's own path, resolved rather than named because a grep function in the
+# profile shadows the name. -commandtype application is what skips that
+# function, and the path it returns cannot be shadowed again at call time.
+# Behind a variable because the Android builds run on Linux and macOS.
+$grep = if ($iswindows) { 'grep.exe' } else {
+    (get-command -commandtype application grep -ea stop | select -first 1).source
+}
 
 if (-not (test-path $repo_path)) {
     pushd $REPOS_ROOT
