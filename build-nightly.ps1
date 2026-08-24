@@ -90,8 +90,6 @@ popd
 	setup_build_env $triplet
     }
 
-    $error = $null
-
     $translations_only_str = if ($translations_only) `
 	{ 'TRUE' } else { 'FALSE' };
 
