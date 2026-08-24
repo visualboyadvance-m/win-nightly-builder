@@ -42,7 +42,7 @@ $build_port_names = $build_ports -replace '\[[^\]]+\]',''
 
 "INFO: vcpkg packages upgrade started on $(date)."
 
-if (-not $islinux -and 'wxwidgets' -in $build_port_names) {
+if ('wxwidgets' -in $build_port_names) {
     $temp_dir = "$env:TEMP/wx-port-temp"
 
     ni -it dir $temp_dir -ea ignore | out-null
@@ -57,7 +57,11 @@ if (-not $islinux -and 'wxwidgets' -in $build_port_names) {
 
     ri -r -fo $temp_dir
 
-    pushd $env:VCPKG_OVERLAY_PORTS
+    pushd $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS })
+
+    # Every builder runs this, so pick up whichever one got here first: the hash
+    # check below then sees its commit and there is nothing left to do.
+    git pull --rebase --autostash
 
     if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
         @(gc wxwidgets/portfile.cmake) | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" } | set-content wxwidgets/portfile.cmake
@@ -76,10 +80,28 @@ if (-not $islinux -and 'wxwidgets' -in $build_port_names) {
             else { $_ }) } | set-content wxwidgets/vcpkg.json
 
         git commit -a -m "wxwidgets: update master hash + bump ver" --signoff
-        git push
 
-        if (-not $?) {
-            write-error 'failed to update wxwidgets port in overlay'
+        if ($lastexitcode -ne 0) {
+            write-error 'failed to commit the wxwidgets port update in the overlay'
+        }
+        else {
+            # Another builder can still have pushed between the pull above and
+            # here, which leaves a non-fast-forward. Rebase onto it and retry
+            # rather than failing the nightly over a lost race.
+            $pushed = $false
+
+            foreach ($try in 1..3) {
+                git push
+
+                if ($lastexitcode -eq 0) { $pushed = $true; break }
+
+                "INFO: push rejected, rebasing onto the remote and retrying ($try)."
+                git pull --rebase --autostash
+            }
+
+            if (-not $pushed) {
+                write-error 'failed to push the wxwidgets port update to the overlay'
+            }
         }
     }
 

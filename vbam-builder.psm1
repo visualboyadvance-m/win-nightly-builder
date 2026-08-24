@@ -51,6 +51,12 @@ $TRIPLETS       = if ($iswindows) {
 		      'x64-osx','arm64-osx'
 		  }
 
+# One per APK published on https://nightly.visualboyadvance-m.org/ --
+# visualboyadvance-m-{arm64,arm,x86_64,x86,riscv64}.apk.  These are cross
+# builds, only set up on Linux and macOS, and they roughly double the work, so
+# they are opt-in via --android rather than part of $TRIPLETS.
+$ANDROID_TRIPLETS = 'arm64-android','arm-android','x64-android','x86-android','riscv64-android'
+
 if ($iswindows) {
     $git_bin_dir   = '/progra~1/git/cmd'
     $cmake_bin_dir = '/progra~1/cmake/bin'
@@ -70,11 +76,18 @@ if (-not $env:VCPKG_ROOT) {
 
 set-alias -force vcpkg (join-path $env:VCPKG_ROOT $(if ($iswindows) { 'vcpkg.exe' } else { 'vcpkg' }))
 
-if ($islinux) {
-    ri -force env:VCPKG_OVERLAY_PORTS -ea ignore
+# The overlay repo, used on every platform.
+$OVERLAY_PORTS  = join-path $REPOS_ROOT vcpkg-overlay
+
+if (-not $env:VCPKG_OVERLAY_PORTS) {
+    $env:VCPKG_OVERLAY_PORTS = $OVERLAY_PORTS
 }
-elseif (-not $env:VCPKG_OVERLAY_PORTS) {
-    $env:VCPKG_OVERLAY_PORTS = join-path $REPOS_ROOT vcpkg-overlay
+
+# The overlay's triplets directory holds riscv64-android, which vcpkg itself has
+# no triplet for.  On Windows setup_build_env points VCPKG_OVERLAY_TRIPLETS at a
+# per-toolkit directory instead, so leave it alone there.
+if ((-not $iswindows) -and (-not $env:VCPKG_OVERLAY_TRIPLETS)) {
+    $env:VCPKG_OVERLAY_TRIPLETS = join-path $OVERLAY_PORTS 'triplets/community'
 }
 
 if (($islinux -or $ismacos) -and (-not $env:TEMP)) { $env:TEMP = '/tmp' }
@@ -552,9 +565,11 @@ function get-triplets {
     if ($myinvocation.expectinginput) { $args = @($input) }
 
     $toolkit     = ''
+    $android     = $false
     $triplet_args = @()
     for ($i = 0; $i -lt $args.count; $i++) {
-        if     ($args[$i] -match '^--?toolkit=(.+)')                         { $toolkit = $matches[1] }
+        if     ($args[$i] -match '^--?android$')                             { $android = $true }
+        elseif ($args[$i] -match '^--?toolkit=(.+)')                         { $toolkit = $matches[1] }
         elseif ($args[$i] -match '^--?toolkit$'  -and $i+1 -lt $args.count) { $toolkit = $args[++$i] }
         elseif ($args[$i] -match '^--?triplets?=(.+)')                       { $triplet_args = @($matches[1] -split '[,\s]+' | ?{ $_ }) }
         elseif ($args[$i] -match '^--?triplets?$') {
@@ -575,6 +590,14 @@ function get-triplets {
     } | select -unique
 
     if (-not $requested_triplets) { $requested_triplets = $TRIPLETS }
+
+    if ($android) {
+        if (-not ($islinux -or $ismacos)) {
+            write-error 'the Android triplets are only built on Linux and macOS' -ea stop
+        }
+
+        $requested_triplets = @($requested_triplets) + @($ANDROID_TRIPLETS) | select -unique
+    }
 
     foreach ($t in $requested_triplets) {
         $tks = if ($toolkit) {
@@ -601,6 +624,6 @@ function get_host_triplet {
     elseif ($ismacos) { "$arch-osx" }
 }
 
-export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES `
+export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_TRIPLETS,OVERLAY_PORTS `
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet `
 		    -alias vcpkg

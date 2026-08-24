@@ -9,8 +9,14 @@ $stage_dir = join-path $env:TEMP   vbam-nightly-build
 $force_build = $args | ?{ $_ -match '^--?f' }
 
 $build_triplets = get-triplets @args | ?{
-    $_ -in 'x64-windows-static','x86-mingw-static','arm64-windows-static'
+    ($_ -in 'x64-windows-static','x86-mingw-static','arm64-windows-static') -or
+    ($_ -in $ANDROID_TRIPLETS)
 }
+
+# On Windows this is the grep.exe from Git for Windows, spelled with the
+# extension so it is not taken for a PowerShell command; elsewhere it is plain
+# grep. Behind a variable because the Android builds run on Linux and macOS.
+$grep = if ($iswindows) { 'grep.exe' } else { 'grep' }
 
 if (-not (test-path $repo_path)) {
     pushd $REPOS_ROOT
@@ -33,12 +39,12 @@ $current = $(git rev-parse --short origin/master)
 
 $sources_changed = $(
     git diff --name-only "${head}..${current}" `
-	| grep.exe -cE 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
+	| & $grep -cE 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
 )
 
 $translations_changed = $(
     git diff --name-only "${head}..${current}" `
-	| grep.exe -cE 'po/wxvbam/.*\.po$' `
+	| & $grep -cE 'po/wxvbam/.*\.po$' `
 )
 
 # Write date and time for beginning of check/build.
@@ -81,15 +87,26 @@ popd
 
     $error = $null
 
-    $compiler = if ($triplet -match 'mingw') { 'gcc' } else { (get-command cl).source }
-
     $translations_only_str = if ($translations_only) `
 	{ 'TRUE' } else { 'FALSE' };
 
-    & cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
-	       -DTRANSLATIONS_ONLY="$translations_only_str" -DBUILD_TESTING=FALSE `
-	       -DCMAKE_C_COMPILER="$compiler" -DCMAKE_CXX_COMPILER="$compiler" `
-	       -G Ninja
+    if ($triplet -in $ANDROID_TRIPLETS) {
+	# The NDK toolchain file the vcpkg triplet chainloads selects the
+	# compiler, so naming one here would only fight it. ANDROID_HOME and
+	# ANDROID_NDK_HOME come from the environment; the project derives
+	# ANDROID_ABI and the API level from the triplet.
+	& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
+		   -DTRANSLATIONS_ONLY="$translations_only_str" -DBUILD_TESTING=FALSE `
+		   -G Ninja
+    }
+    else {
+	$compiler = if ($triplet -match 'mingw') { 'gcc' } else { (get-command cl).source }
+
+	& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
+		   -DTRANSLATIONS_ONLY="$translations_only_str" -DBUILD_TESTING=FALSE `
+		   -DCMAKE_C_COMPILER="$compiler" -DCMAKE_CXX_COMPILER="$compiler" `
+		   -G Ninja
+    }
 
     if (test-path build.ninja) { ninja }
 
@@ -107,7 +124,12 @@ ni -it dir $stage_dir | out-null
 
 if (-not $translations_only) {
     foreach ($triplet in $build_triplets) {
-	cpi -fo $repo_path/build-$triplet/*.zip $stage_dir
+	# The Android builds produce visualboyadvance-m-<ARCH_NAME>.apk, the
+	# native ones a zip; either way the name the build chose is the name that
+	# gets published.
+	$artifacts = if ($triplet -in $ANDROID_TRIPLETS) { '*.apk' } else { '*.zip' }
+
+	cpi -fo "$repo_path/build-$triplet/$artifacts" $stage_dir
     }
 }
 else {
