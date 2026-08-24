@@ -27,22 +27,29 @@ $force_build = if ($filtered_args[0] -match '^--?f') { $true} else { $false }
 $build_triplets = get-triplets @filtered_args
 
 if ($packages) {
-    $unknown = $packages | ?{ $_ -notin $DEP_PORT_NAMES }
+    $unknown = $packages | ?{ $_ -notin $ALL_DEP_PORT_NAMES }
     if ($unknown) { write-error "Unknown package(s): $($unknown -join ', ')" -ea stop }
-    $build_ports = $DEP_PORTS | ?{ ($_ -replace '\[[^\]]+\]','') -in $packages }
-} else {
-    $build_ports = $DEP_PORTS
 }
 if ($skip_packages) {
-    $unknown = $skip_packages | ?{ $_ -notin $DEP_PORT_NAMES }
+    $unknown = $skip_packages | ?{ $_ -notin $ALL_DEP_PORT_NAMES }
     if ($unknown) { write-error "Unknown skip package(s): $($unknown -join ', ')" -ea stop }
-    $build_ports = $build_ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $skip_packages }
 }
-$build_port_names = $build_ports -replace '\[[^\]]+\]',''
+
+# Which ports a triplet wants is a property of the triplet, not of the host:
+# an Android triplet takes the cross list, everything else the host's own. The
+# --packages/--skip-packages filters then apply to whichever list that is.
+function selected_ports([string]$triplet) {
+    $ports = get_dep_ports $triplet
+    if ($packages)      { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -in $packages } }
+    if ($skip_packages) { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $skip_packages } }
+    @($ports)
+}
+
+$selected_port_names = @($build_triplets | %{ selected_ports $_ }) -replace '\[[^\]]+\]','' | select-object -unique
 
 "INFO: vcpkg packages upgrade started on $(date)."
 
-if ('wxwidgets' -in $build_port_names) {
+if ('wxwidgets' -in $selected_port_names) {
     $temp_dir = "$env:TEMP/wx-port-temp"
 
     ni -it dir $temp_dir -ea ignore | out-null
@@ -121,6 +128,9 @@ $throttle           = [System.Environment]::ProcessorCount
 $binpkg_module      = $null
 
 foreach ($triplet in $build_triplets) {
+    $build_ports      = selected_ports $triplet
+    $build_port_names = @($build_ports -replace '\[[^\]]+\]','')
+
     foreach ($tk in $triplet.toolkits) {
         setup_build_env $triplet $tk
 
@@ -152,17 +162,46 @@ foreach ($triplet in $build_triplets) {
         # For cross-compiling triplets, build host-tool dependencies for the
         # target architecture's native host triplet (e.g. arm64-windows for an
         # arm64-windows-static target) so they are usable on the target machine.
-        if (-not $packages -and $host_t -and ($triplet -split '-')[0] -ne ($host_t -split '-')[0]) {
-            # Derive the native host triplet for the target arch: same OS as
-            # the build host but the target's own architecture.
-            $target_arch   = ($triplet.ToString() -split '-')[0]
-            $host_os       = ($host_t -split '-')[1]
-            $target_host_t = "$target_arch-$host_os"
+        $is_android = "$triplet" -in $ANDROID_TRIPLETS
+
+        if (-not $packages -and $host_t -and ($is_android -or (($triplet -split '-')[0] -ne ($host_t -split '-')[0]))) {
+            if ($is_android) {
+                # Android is never a host. Nothing on the device runs moc or
+                # androiddeployqt, so there is no "<target arch>-<host os>"
+                # machine to build host tools for -- deriving one the way the
+                # branch below does would cross-build a Linux host's tool
+                # closure, X11 and all, for an arm64-linux nobody consumes.
+                # The host tools an Android build needs are the ones on the
+                # machine doing the building, so stay on the host triplet.
+                $target_host_t = $host_t
+            }
+            else {
+                # Derive the native host triplet for the target arch: same OS as
+                # the build host but the target's own architecture.
+                $target_arch   = ($triplet.ToString() -split '-')[0]
+                $host_os       = ($host_t -split '-')[1]
+                $target_host_t = "$target_arch-$host_os"
+            }
 
             $installed = vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ $_ -in $build_port_names }
             if ($installed) {
                 $qualified = @($installed | %{ "${_}:$triplet" })
-                $host_deps = @(vcpkg-listhostdeps @qualified) | ?{ $_ } | select-object -unique
+
+                # The host dependency that matters for Android is Qt: vcpkg
+                # builds qtbase and qttools for the host while building them
+                # for the target, and no desktop build asks for either, so
+                # without this an Android builder has no host Qt to fetch.
+                # -Direct stops there. The full closure is what a bare host
+                # needs to build those tools from nothing, which is the right
+                # answer for the cross-Windows targets below and the wrong one
+                # here: under a host Qt it reaches the whole desktop stack --
+                # fontconfig, dbus, libsystemd -- that the host already has and
+                # no APK put there.
+                $host_deps = @(
+                    if ($is_android) { vcpkg-listhostdeps -Direct @qualified }
+                    else             { vcpkg-listhostdeps         @qualified }
+                ) | ?{ $_ } | select-object -unique
+
                 if ($host_deps) {
                     $target_host_tks = @(get-triplets @filtered_args "--triplets=$target_host_t")[0].Toolkits
 
@@ -179,7 +218,7 @@ foreach ($triplet in $build_triplets) {
                         $th_subdir = if ($th_tk) { "$target_host_t/$th_tk" } else { $target_host_t }
                         ni -it dir $th_subdir -ea ignore | out-null
                         $th_subdir_abs = join-path $stage_dir $th_subdir
-                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | %{
+                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $is_android -or $_ -in $host_deps } | %{
                             start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
                                 param($_)
                                 import-module $using:binpkg_module
@@ -190,7 +229,7 @@ foreach ($triplet in $build_triplets) {
                         } | receive-job -wait -autoremovejob
                     }
 
-                    if (-not $added_target_hosts[$target_host_t]) {
+                    if ((-not $added_target_hosts[$target_host_t]) -and ($target_host_t -notin @($build_triplets | %{ "$_" }))) {
                         $added_target_hosts[$target_host_t] = $true
                         $th_obj = [PSCustomObject]@{ Triplet = $target_host_t; Toolkits = $target_host_tks }
                         $th_obj | add-member -membertype scriptmethod -name ToString -value { $this.Triplet } -force

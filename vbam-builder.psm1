@@ -26,6 +26,10 @@ $REPOS_ROOT     = $ROOT + '/source/repos'
 
 $DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft 'ffmpeg[x264,x265]'
 
+# The set before any host's desktop additions. $ANDROID_DEP_PORTS is built from
+# this rather than from $DEP_PORTS, which by then carries GTK, X11 and friends.
+$COMMON_DEP_PORTS = $DEP_PORTS
+
 if ($islinux) {
     # tiff only arrives transitively here, via wxwidgets and gdk-pixbuf. Build
     # it explicitly so it is upgraded by name along with the rest, and so the
@@ -42,6 +46,31 @@ if ($iswindows) {
 }
 
 $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
+
+# Android is a cross target, not a host, and the desktop pieces the host list
+# adds above are not merely useless in an APK but unbuildable: both gtk3 and
+# vulkan-loader declare `supports: !android`, and asking for them anyway --
+# which --allow-unsupported does -- drags the whole X11 stack behind them for a
+# triplet that has no X server. The vulkan port is fine: it gates the loader on
+# !android by itself, leaving the headers, which is all the NDK needs.
+#
+# The other direction is Qt. wxQt is the wx backend on Android, so the target
+# needs a Qt that no desktop build asks for; naming it here is also what gets
+# the *host* Qt built, since vcpkg records qtbase:<host> as a host dependency
+# of qtbase:*-android and both moc and androiddeployqt run on the build
+# machine. tiff is named for the reason it is on Linux: wx links it, and naming
+# it keeps it upgraded by name instead of only ever arriving transitively.
+# SDL3 drops its libusb feature here: on Android the HID backend is the Java one
+# under org/libsdl/app, which the APK carries itself, and the feature only turns
+# on SDL_HIDAPI_LIBUSB. The port is not platform-gated, so asking for it builds
+# libusb for a target that never links it.
+$ANDROID_DEP_PORTS = @('vulkan', 'qtbase', 'qttools', 'tiff') +
+                     ($COMMON_DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]')
+
+$ANDROID_DEP_PORT_NAMES = $ANDROID_DEP_PORTS -replace '\[[^\]]+\]',''
+
+# Every port name either list can name, for validating --packages/--skip-packages.
+$ALL_DEP_PORT_NAMES = @($DEP_PORT_NAMES) + @($ANDROID_DEP_PORT_NAMES) | select-object -unique
 
 $TRIPLETS       = if ($iswindows) {
 		      'x86-mingw-static','x64-mingw-static',(echo x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }) | echo
@@ -613,6 +642,12 @@ function get-triplets {
     }
 }
 
+# The port list a triplet wants: Android takes the cross list, everything else
+# the host's own. Callers pass the triplet object or its name.
+function get_dep_ports([string]$triplet = '') {
+    if ($triplet -match '-android$') { $ANDROID_DEP_PORTS } else { $DEP_PORTS }
+}
+
 function get_host_triplet {
     $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
         'Arm64' { 'arm64' }
@@ -624,6 +659,6 @@ function get_host_triplet {
     elseif ($ismacos) { "$arch-osx" }
 }
 
-export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet `
+export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,OVERLAY_PORTS `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports `
 		    -alias vcpkg

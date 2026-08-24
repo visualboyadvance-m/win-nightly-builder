@@ -26,8 +26,12 @@ foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
         setup_build_env $triplet $tk
 
-        vcpkg --triplet $triplet install --no-binarycaching --recurse --keep-going $DEP_PORTS
-        vcpkg --triplet $triplet upgrade --no-binarycaching $DEP_PORT_NAMES --no-dry-run
+        # An Android triplet takes the cross list; GTK and the X11/Wayland
+        # Vulkan loader the host list carries do not build for it.
+        $ports = get_dep_ports $triplet
+
+        vcpkg --triplet $triplet install --no-binarycaching --recurse --keep-going $ports
+        vcpkg --triplet $triplet upgrade --no-binarycaching ($ports -replace '\[[^\]]+\]','') --no-dry-run
 
         $build_dir = join-path $repo_path build-$triplet
 
