@@ -236,10 +236,28 @@ foreach ($triplet in $build_triplets) {
                             vcpkg --triplet $target_host_t --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
                         }
 
+                        # What to build is the direct set; what to package is
+                        # its closure.  A consumer restoring the host Qt needs
+                        # what that Qt was built against -- libb2, md4c,
+                        # double-conversion, egl, libpq, sqlite3 -- or
+                        # vcpkg-instpkg prunes it as incomplete, prunes the
+                        # target Qt that names it, and the build compiles Qt
+                        # from source for both.  Those are installed here and
+                        # never published, since only $host_deps was packaged.
+                        #
+                        # Computed after the install above, not beside
+                        # $host_deps: the walk reads each host package's own
+                        # dependencies out of the status file, so it stops at a
+                        # host Qt that is not installed yet.
+                        $host_pkg_deps = @(
+                            if ($is_android) { vcpkg-listhostdeps @qualified }
+                            else             { $host_deps }
+                        ) | ?{ $_ } | select-object -unique
+
                         $th_subdir = if ($th_tk) { "$target_host_t/$th_tk" } else { $target_host_t }
                         ni -it dir $th_subdir -ea ignore | out-null
                         $th_subdir_abs = join-path $stage_dir $th_subdir
-                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $is_android -or $_ -in $host_deps } | %{
+                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $is_android -or $_ -in $host_pkg_deps } | %{
                             start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
                                 param($_)
                                 import-module $using:binpkg_module
