@@ -194,7 +194,17 @@ foreach ($triplet in $build_triplets) {
                 $target_host_t = "$target_arch-$host_os"
             }
 
-            $installed = vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ $_ -in $build_port_names }
+            # Every port installed for the triplet, not just the ones named in
+            # the port list. A host dependency belongs to the port that declares
+            # it, and the ones that matter here are declared by ports nobody
+            # names: icu arrives under qtbase and asks for icu on the host to
+            # cross-build its data, and vcpkg-instpkg on the consuming side
+            # insists on the build dependencies of every zip it installs,
+            # transitive ones included. Filtering to the named ports left those
+            # unbuilt and unpublished, so a consumer restoring the target zip
+            # was told its database was corrupt -- icu:arm64-android installed,
+            # icu:x64-linux not -- and built a host icu to fix it.
+            $installed = vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' }
             if ($installed) {
                 $qualified = @($installed | %{ "${_}:$triplet" })
 
