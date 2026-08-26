@@ -12,18 +12,19 @@ $build_triplets = get-triplets @args | ?{
     ($_ -in $ANDROID_TRIPLETS)
 }
 
-# The Android nightly gets a checkout of its own. What decides whether there is
-# anything to build is the checkout's HEAD against origin/master, and a run that
-# builds then advances HEAD to match -- so out of one checkout the first run to
-# finish tells every later one that nothing changed. An Android run following a
-# Windows one would find its own artifacts perpetually stale and never rebuild
-# them.
-$android_build = [bool]@($build_triplets | ?{ $_ -in $ANDROID_TRIPLETS })
-
-$repo_path = join-path $REPOS_ROOT $(
-    if ($android_build) { 'visualboyadvance-m-nightly-android' }
-    else                { 'visualboyadvance-m-nightly' }
-)
+# Which checkout a triplet builds out of. Android gets one of its own: what
+# decides whether there is anything to build is the checkout's HEAD against
+# origin/master, and a run that builds then advances HEAD to match, so out of a
+# shared checkout the first run to finish tells every later one that nothing
+# changed -- an Android nightly following a Windows one would find its APKs
+# perpetually stale and never rebuild them. Answered per triplet rather than
+# once for the run, so a set holding both kinds gets both checkouts.
+function repo_for_triplet($triplet) {
+    join-path $REPOS_ROOT $(
+	if ($triplet -in $ANDROID_TRIPLETS) { 'visualboyadvance-m-nightly-android' }
+	else                                { 'visualboyadvance-m-nightly' }
+    )
+}
 
 # On Windows this is the grep.exe from Git for Windows, spelled with the
 # extension so it is not taken for a PowerShell command; elsewhere it is the
@@ -35,60 +36,89 @@ $grep = if ($iswindows) { 'grep.exe' } else {
     (get-command -commandtype application grep -ea stop | select -first 1).source
 }
 
-if (-not (test-path $repo_path)) {
-    pushd $REPOS_ROOT
-
-    git clone https://github.com/visualboyadvance-m/visualboyadvance-m.git (split-path -leaf $repo_path)
-
-    popd
-
-    $force_build = $true
-}
-
-pushd $repo_path
-
-git fetch --all --prune
-git submodule update --init --recursive
-git submodule update
-
-$head    = $(git rev-parse --short HEAD)
-$current = $(git rev-parse --short origin/master)
-
-$sources_changed = $(
-    git diff --name-only "${head}..${current}" `
-	| & $grep -cE 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
-)
-
-$translations_changed = $(
-    git diff --name-only "${head}..${current}" `
-	| & $grep -cE 'po/wxvbam/.*\.po$' `
-)
-
 # Write date and time for beginning of check/build.
 date
 
-if (($sources_changed      -eq 0) -and `
-    ($translations_changed -gt 0)) {
-	'INFO: Building translations.zip only.'
-	$translations_only = $true
+# What to build, as one entry per triplet naming the checkout it comes out of
+# and whether that checkout has anything but translations to offer. Each
+# checkout is fetched and asked once, however many triplets it carries.
+$plan = @()
+
+foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -unique)) {
+    $repo_name = split-path -leaf $repo_path
+    $forced    = [bool]$force_build
+
+    if (-not (test-path $repo_path)) {
+	pushd $REPOS_ROOT
+
+	git clone https://github.com/visualboyadvance-m/visualboyadvance-m.git $repo_name
+
+	popd
+
+	$forced = $true
+    }
+
+    pushd $repo_path
+
+    git fetch --all --prune
+    git submodule update --init --recursive
+    git submodule update
+
+    $head    = $(git rev-parse --short HEAD)
+    $current = $(git rev-parse --short origin/master)
+
+    $sources_changed = $(
+	git diff --name-only "${head}..${current}" `
+	    | & $grep -cE 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
+    )
+
+    $translations_changed = $(
+	git diff --name-only "${head}..${current}" `
+	    | & $grep -cE 'po/wxvbam/.*\.po$' `
+    )
+
+    $translations_only = ($sources_changed      -eq 0) -and `
+			 ($translations_changed -gt 0)
+
+    if ((-not $forced) -and `
+	($sources_changed -eq 0) -and `
+	(-not $translations_only)) {
+	"INFO: No changes to build in ${repo_name}."
+	popd
+	continue
+    }
+
+    if ($translations_only) {
+	"INFO: Building translations.zip only in ${repo_name}."
+    }
+
+    git pull --rebase
+
+    popd
+
+    $repo_triplets = @($build_triplets | ?{ (repo_for_triplet $_) -eq $repo_path })
+
+    # translations.zip does not depend on the architecture, so one build of it
+    # is all a checkout needs however many triplets asked for it.
+    if ($translations_only) {
+	$repo_triplets = @($repo_triplets | select -first 1)
+    }
+
+    $plan += @($repo_triplets | %{
+	@{ triplet = $_; repo = $repo_path; translations_only = $translations_only }
+    })
 }
 
-if ((-not $force_build) -and `
-    ($sources_changed -eq 0) -and `
-    (-not $translations_only)) {
-	'INFO: No changes to build.'
-	popd
-	return
+if (-not $plan) {
+    'INFO: No changes to build.'
+    return
 }
 
 "INFO: Build started on $(date)."
 
-git pull --rebase
-
-popd
-
-:triplet foreach ($triplet in $build_triplets) {
-    $build_dir = "$repo_path/build-$triplet"
+foreach ($item in $plan) {
+    $triplet   = $item.triplet
+    $build_dir = "$($item.repo)/build-$triplet"
 
     ri -r -fo  $build_dir -ea ignore
     ni -it dir $build_dir | out-null
@@ -102,7 +132,7 @@ popd
 	setup_build_env $triplet
     }
 
-    $translations_only_str = if ($translations_only) `
+    $translations_only_str = if ($item.translations_only) `
 	{ 'TRUE' } else { 'FALSE' };
 
     if ($triplet -in $ANDROID_TRIPLETS) {
@@ -126,10 +156,6 @@ popd
     if (test-path build.ninja) { ninja }
 
     popd
-
-    if ($translations_only) {
-	break triplet
-    }
 }
 
 teardown_build_env
@@ -137,21 +163,16 @@ teardown_build_env
 ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir | out-null
 
-if (-not $translations_only) {
-    foreach ($triplet in $build_triplets) {
-	# The Android builds produce visualboyadvance-m-<ARCH_NAME>.apk, the
-	# native ones a zip; either way the name the build chose is the name that
-	# gets published.
-	$artifacts = if ($triplet -in $ANDROID_TRIPLETS) { '*.apk' } else { '*.zip' }
+foreach ($item in $plan) {
+    # The Android builds produce visualboyadvance-m-<ARCH_NAME>.apk, the native
+    # ones a zip; either way the name the build chose is the name that gets
+    # published.
+    $artifacts = if     ($item.translations_only)         { 'translations.zip' }
+		 elseif ($item.triplet -in $ANDROID_TRIPLETS) { '*.apk' }
+		 else                                         { '*.zip' }
 
-	cpi -fo "$repo_path/build-$triplet/$artifacts" $stage_dir
-    }
+    cpi -fo "$($item.repo)/build-$($item.triplet)/$artifacts" $stage_dir
 }
-else {
-    cpi -fo $repo_path/build-*/translations.zip  $stage_dir
-}
-
-popd
 
 pushd $stage_dir
 
