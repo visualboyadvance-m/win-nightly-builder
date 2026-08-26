@@ -3,8 +3,7 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 #$erroractionpreference = 'stop'
 $progresspreference    = 'silentlycontinue'
 
-$repo_path = join-path $REPOS_ROOT visualboyadvance-m-nightly
-$stage_dir = join-path $env:TEMP   vbam-nightly-build
+$stage_dir = join-path $env:TEMP vbam-nightly-build
 
 $force_build = $args | ?{ $_ -match '^--?f' }
 
@@ -12,6 +11,19 @@ $build_triplets = get-triplets @args | ?{
     ($_ -in 'x64-windows-static','x86-mingw-static','arm64-windows-static') -or
     ($_ -in $ANDROID_TRIPLETS)
 }
+
+# The Android nightly gets a checkout of its own. What decides whether there is
+# anything to build is the checkout's HEAD against origin/master, and a run that
+# builds then advances HEAD to match -- so out of one checkout the first run to
+# finish tells every later one that nothing changed. An Android run following a
+# Windows one would find its own artifacts perpetually stale and never rebuild
+# them.
+$android_build = [bool]@($build_triplets | ?{ $_ -in $ANDROID_TRIPLETS })
+
+$repo_path = join-path $REPOS_ROOT $(
+    if ($android_build) { 'visualboyadvance-m-nightly-android' }
+    else                { 'visualboyadvance-m-nightly' }
+)
 
 # On Windows this is the grep.exe from Git for Windows, spelled with the
 # extension so it is not taken for a PowerShell command; elsewhere it is the
@@ -26,7 +38,7 @@ $grep = if ($iswindows) { 'grep.exe' } else {
 if (-not (test-path $repo_path)) {
     pushd $REPOS_ROOT
 
-    git clone https://github.com/visualboyadvance-m/visualboyadvance-m.git visualboyadvance-m-nightly
+    git clone https://github.com/visualboyadvance-m/visualboyadvance-m.git (split-path -leaf $repo_path)
 
     popd
 
