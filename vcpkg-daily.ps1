@@ -289,7 +289,22 @@ foreach ($triplet in $build_triplets) {
         $pkg_subdir  = if ($tk) { "$triplet/$tk" } else { $triplet }
         $remote_dir  = "vcpkg/$(if ($tk) { "$triplet/$tk" } else { $triplet })"
         $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
-        $existing_pkgs = 'ls' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | select -skip 3 | %{ $_ -replace '^([^_]+).*', '$1' }
+        # What is up there already, so the put below can clear the older
+        # versions of it first.
+        #
+        # sftp writes "Connected to ..." to stderr and "Changing to: ..." plus
+        # the echoed prompt to stdout, so with stderr discarded two header lines
+        # arrive rather than three -- and skipping three took the first file
+        # with them. That is the alphabetically first port in the directory,
+        # which therefore never looked present and never had its older versions
+        # removed: x64-linux collected two alsa packages that way, and a
+        # consumer offered a choice of two took neither.
+        #
+        # Match the names instead of counting what comes before them, and ask
+        # for one per line so a short name cannot share one.
+        $existing_pkgs = @('ls -1' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | %{
+            if ($_ -match '^\s*([^_\s]+)_[^_\s]+_[^_\s]+\.zip\s*$') { $matches[1] }
+        }) | select-object -unique
         gci $pkg_subdir_abs -filter '*.zip' | %{
             start-threadjob -throttlelimit 3 -argumentlist $_ -scriptblock {
                 param($_)
