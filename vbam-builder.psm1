@@ -24,6 +24,14 @@ $ROOT           = $(if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } e
 
 $REPOS_ROOT     = $ROOT + '/source/repos'
 
+# The ports the binary packages are built from, and the features they are built
+# with. The features have to be the ones VCPKG_DEPS in the emulator's top-level
+# CMakeLists.txt asks for: nothing in a package's name records which features
+# went into it, so a consumer that asks for one this list did not build gets a
+# package silently short of it, and one that asks for a port whose defaults
+# this list turned off ([core]) rebuilds it from source to add them. Ports
+# named here and not there are the other way round -- extra features on things
+# wxWidgets only pulls in transitively -- and cost the consumer nothing.
 $DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft 'ffmpeg[x264,x265]'
 
 # The set before any host's desktop additions. $ANDROID_DEP_PORTS is built from
