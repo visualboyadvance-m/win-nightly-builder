@@ -30,8 +30,8 @@ foreach ($triplet in $build_triplets) {
         # Vulkan loader the host list carries do not build for it.
         $ports = get_dep_ports $triplet
 
-        vcpkg --triplet $triplet install --no-binarycaching --recurse --keep-going $ports
-        vcpkg --triplet $triplet upgrade --no-binarycaching ($ports -replace '\[[^\]]+\]','') --no-dry-run
+        vcpkg --triplet $triplet install --no-binarycaching --recurse --keep-going $ports --allow-unsupported
+        vcpkg --triplet $triplet upgrade --no-binarycaching ($ports -replace '\[[^\]]+\]','') --no-dry-run --allow-unsupported
 
         $build_dir = join-path $repo_path build-$triplet
 
