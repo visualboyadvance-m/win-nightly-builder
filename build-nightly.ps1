@@ -140,9 +140,27 @@ foreach ($item in $plan) {
 	# compiler, so naming one here would only fight it. ANDROID_HOME and
 	# ANDROID_NDK_HOME come from the environment; the project derives
 	# ANDROID_ABI and the API level from the triplet.
-	& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
-		   -DTRANSLATIONS_ONLY="$translations_only_str" -DBUILD_TESTING=FALSE `
+	if ($triplet -in "arm64-android") {
+		& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
+		   -DTRANSLATIONS_ONLY="$translations_only_str" -DANDROID_ABI=arm64-v8a -DBUILD_TESTING=FALSE `
 		   -G Ninja
+        } else { if ($triplet -in "arm-android") {
+		& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
+		   -DTRANSLATIONS_ONLY="$translations_only_str" -DANDROID_ABI=armeabi-v7a -DBUILD_TESTING=FALSE `
+		   -G Ninja
+        } else { if ($triplet -in "x86-android") {
+		& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
+		   -DTRANSLATIONS_ONLY="$translations_only_str" -DANDROID_ABI=x86 -DBUILD_TESTING=FALSE `
+		   -G Ninja
+        } else { if ($triplet -in "x86_64-android") {
+		& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
+		   -DTRANSLATIONS_ONLY="$translations_only_str" -DANDROID_ABI=x86_64 -DBUILD_TESTING=FALSE `
+		   -G Ninja
+        } else { if ($triplet -in "riscv64-android") {
+		& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
+		   -DTRANSLATIONS_ONLY="$translations_only_str" -DANDROID_ABI=riscv64 -DBUILD_TESTING=FALSE `
+		   -G Ninja
+	}}}}}
     }
     else {
 	$compiler = if ($triplet -match 'mingw') { 'gcc' } else { (get-command cl).source }
