@@ -14,8 +14,8 @@ for ($i = 0; $i -lt $args.count; $i++) {
         $packages = @()
         while ($i+1 -lt $args.count -and $args[$i+1] -notmatch '^-') { $packages += $args[++$i] -split '[,\s]+' | ?{ $_ } }
     }
-    elseif ($args[$i] -match '^--?skip-?packages?=(.+)')    { $skip_packages = @($matches[1] -split '[,\s]+' | ?{ $_ }) }
-    elseif ($args[$i] -match '^--?skip-?packages?$')        {
+    elseif ($args[$i] -match '^--?skip[-_]?packages?=(.+)')    { $skip_packages = @($matches[1] -split '[,\s]+' | ?{ $_ }) }
+    elseif ($args[$i] -match '^--?skip[-_]?packages?$')        {
         $skip_packages = @()
         while ($i+1 -lt $args.count -and $args[$i+1] -notmatch '^-') { $skip_packages += $args[++$i] -split '[,\s]+' | ?{ $_ } }
     }
@@ -137,6 +137,10 @@ $extra_triplets     = @()
 $added_target_hosts = @{}
 $throttle           = [System.Environment]::ProcessorCount
 $binpkg_module      = $null
+# Ports whose packaging was skipped, filled in by the packing jobs below.
+$pack_failures      = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
+# Ports that never came out of the build at all.
+$build_failures     = @()
 
 foreach ($triplet in $build_triplets) {
     $build_ports      = selected_ports $triplet
@@ -160,13 +164,46 @@ foreach ($triplet in $build_triplets) {
         ni -it dir $pkg_subdir -ea ignore | out-null
         $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
         $triplet_s      = "$triplet"
-        vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $packages -or $_ -in $build_port_names } | %{
+        $installed_names = @(vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' })
+
+        # A port that failed to build was never installed, so vcpkg-list does
+        # not mention it, so the packing pipeline below never sees it: no
+        # package, and no failing job to warn from either. Nothing downstream
+        # can tell that apart from a port that was never asked for, which is
+        # how a failed ffmpeg:x86-mingw-static went out as a clean run. Diff
+        # what was asked for against what came out installed and say the
+        # difference out loud.
+        foreach ($missing in @($build_port_names | ?{ $_ -notin $installed_names })) {
+            $build_failures += "${missing}:$triplet$(if ($tk) { " ($tk)" })"
+            write-warning "${missing}:$triplet did not build, nothing to package"
+        }
+
+        $installed_names | ?{ -not $packages -or $_ -in $build_port_names } | %{
             start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
                 param($_)
+                # Held under another name: $_ is the error record inside the
+                # catch below.
+                $pkg       = $_
+                $qualified = "${pkg}:$($using:triplet_s)"
                 import-module $using:binpkg_module
                 set-location $using:pkg_subdir_abs
-                "Packing $_ for $($using:triplet_s)$(if ($using:tk) { " ($($using:tk))" })..."
-                vcpkg-mkpkg "${_}:$($using:triplet_s)"
+                "Packing $pkg for $($using:triplet_s)$(if ($using:tk) { " ($($using:tk))" })..."
+                try {
+                    vcpkg-mkpkg $qualified
+                }
+                catch {
+                    # A port that failed to build is not installed, so there is
+                    # nothing to package for it and vcpkg-mkpkg says so as a
+                    # terminating error -- which receive-job re-raises in the
+                    # parent, where erroractionpreference is stop, and one
+                    # broken port took the whole nightly with it. Skip that
+                    # port instead: the other packages for this triplet still
+                    # get published, and the previous version of this one stays
+                    # up since nothing replaces it.
+                    ri "${pkg}_*.zip" -fo -ea ignore
+                    ($using:pack_failures).Add($qualified)
+                    write-warning "skipping ${qualified}: packaging failed: $($_.exception.message)"
+                }
             }
         } | receive-job -wait -autoremovejob
 
@@ -257,13 +294,33 @@ foreach ($triplet in $build_triplets) {
                         $th_subdir = if ($th_tk) { "$target_host_t/$th_tk" } else { $target_host_t }
                         ni -it dir $th_subdir -ea ignore | out-null
                         $th_subdir_abs = join-path $stage_dir $th_subdir
-                        vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' } | ?{ -not $is_android -or $_ -in $host_pkg_deps } | %{
+                        $th_installed = @(vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' })
+
+                        # Same silent gap as the target packing above: a host
+                        # dep that failed to build just is not in the list.
+                        foreach ($missing in @($host_deps | ?{ $_ -notin $th_installed })) {
+                            $build_failures += "${missing}:$target_host_t$(if ($th_tk) { " ($th_tk)" })"
+                            write-warning "${missing}:$target_host_t did not build, nothing to package"
+                        }
+
+                        $th_installed | ?{ -not $is_android -or $_ -in $host_pkg_deps } | %{
                             start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
                                 param($_)
+                                $pkg       = $_
+                                $qualified = "${pkg}:$($using:target_host_t)"
                                 import-module $using:binpkg_module
                                 set-location $using:th_subdir_abs
-                                "Packing $_ for $($using:target_host_t)$(if ($using:th_tk) { " ($($using:th_tk))" })..."
-                                vcpkg-mkpkg "${_}:$($using:target_host_t)"
+                                "Packing $pkg for $($using:target_host_t)$(if ($using:th_tk) { " ($($using:th_tk))" })..."
+                                try {
+                                    vcpkg-mkpkg $qualified
+                                }
+                                catch {
+                                    # Skip a host dep that failed to build, the
+                                    # same as the target packing above.
+                                    ri "${pkg}_*.zip" -fo -ea ignore
+                                    ($using:pack_failures).Add($qualified)
+                                    write-warning "skipping ${qualified}: packaging failed: $($_.exception.message)"
+                                }
                             }
                         } | receive-job -wait -autoremovejob
                     }
@@ -338,6 +395,16 @@ foreach ($triplet in $build_triplets) {
 popd
 
 ri -r -fo $stage_dir
+
+# Skipped ports are only a warning in the job that hit them, thousands of lines
+# back in the log by now, so say plainly at the end what did not get published.
+if ($build_failures) {
+    "WARNING: did not build, no package published: $((@($build_failures) | sort-object -unique) -join ', ')"
+}
+
+if ($pack_failures.count) {
+    "WARNING: packaging skipped for: $((@($pack_failures) | sort-object -unique) -join ', ')"
+}
 
 'INFO: vcpkg packages upgrade successful!'
 
