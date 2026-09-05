@@ -32,7 +32,16 @@ $REPOS_ROOT     = $ROOT + '/source/repos'
 # this list turned off ([core]) rebuilds it from source to add them. Ports
 # named here and not there are the other way round -- extra features on things
 # wxWidgets only pulls in transitively -- and cost the consumer nothing.
-$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft 'ffmpeg[x264,x265]'
+#
+# x264 and x265 are named for the reason tiff is below: they only ever arrive
+# under ffmpeg[x264,x265], and vcpkg upgrade rebuilds the packages it is given
+# and their dependents, never their already-installed dependencies. Unnamed,
+# they were pinned at whatever version first got installed -- x265 sat at 4.1
+# while the overlay was at 4.3 -- and each overlay bump rebuilt ffmpeg against
+# the stale copy instead, since a dependency's ABI feeds into ffmpeg's own.
+# Their default features are what ffmpeg asks for (x264's asm and gpl, x265 has
+# none), so naming them bare changes nothing about how they are built.
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
 
 # The set before any host's desktop additions. $ANDROID_DEP_PORTS is built from
 # this rather than from $DEP_PORTS, which by then carries GTK, X11 and friends.
