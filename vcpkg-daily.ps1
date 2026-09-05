@@ -152,6 +152,28 @@ foreach ($triplet in $build_triplets) {
         if (-not $binpkg_module) { $binpkg_module = (get-module vcpkg-binpkg).path }
         $host_t = get_host_triplet
 
+        # vcpkg install treats a dependency as satisfied when a package of that
+        # name is installed for that triplet: it never compares what is
+        # installed against the ports tree. A cross build therefore configures
+        # against whatever host copy happens to be there, however stale --
+        # qtbase:arm64-android 6.11.2 against a host qtbase left at 6.11.1
+        # fails Qt6CoreTools' version check and never configures.
+        #
+        # The host-dep pass further down cannot fix that: it derives host deps
+        # from the target packages that are *installed*, and the port needing
+        # the host refresh is exactly the one that fails to install, so it is
+        # never in that list and the host copy is never revisited. Refresh the
+        # host copies of what we are about to build before building it, and
+        # only those already installed for the host triplet, so this stays an
+        # upgrade of what the host has and never drags in a new desktop stack.
+        if ("$host_t" -and "$host_t" -ne "$triplet") {
+            $host_installed = @(vcpkg-list | ?{ $_ -match (":$host_t" + '\s+\d') } | %{ $_ -replace ':.*','' })
+
+            foreach ($port in @($build_port_names | ?{ $_ -in $host_installed })) {
+                vcpkg --triplet $host_t --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
+            }
+        }
+
         foreach ($port in $build_ports) {
             vcpkg --triplet $triplet --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $port
         }
