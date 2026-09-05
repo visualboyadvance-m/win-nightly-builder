@@ -101,7 +101,7 @@ $TRIPLETS       = if ($iswindows) {
 # visualboyadvance-m-{arm64,arm,x86_64,x86,riscv64}.apk.  These are cross
 # builds, only set up on Linux and macOS, and they roughly double the work, so
 # they are opt-in via --android rather than part of $TRIPLETS.
-$ANDROID_TRIPLETS = 'arm64-android','arm-android','x64-android','x86-android','riscv64-android'
+$ANDROID_TRIPLETS = 'arm64-android','arm-neon-android','x64-android','x86-android','riscv64-android'
 
 if ($iswindows) {
     $git_bin_dir   = '/progra~1/git/cmd'
