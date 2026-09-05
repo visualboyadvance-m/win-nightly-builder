@@ -454,6 +454,26 @@ if ($iswindows) {
     }
 }
 
+# vcpkg-list, vcpkg-mkpkg and vcpkg-listhostdeps live in their own repo.
+# setup_build_env pulls them in, once per session.
+function update_binpkg_module {
+    if (-not (test-path $REPOS_ROOT/vcpkg-binpkg-prototype)) {
+        pushd $REPOS_ROOT
+
+        git clone git@github.com:rkitover/vcpkg-binpkg-prototype
+
+        popd
+    }
+
+    pushd $REPOS_ROOT/vcpkg-binpkg-prototype
+
+    git pull --rebase
+
+    popd
+
+    import-module -global -force "$REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
+}
+
 function update_vcpkg([string]$toolkit = '') {
     $vcpkg_dir  = if ($toolkit) { $env:VCPKG_ROOT.TrimEnd('/\') + "-$toolkit" } else { $env:VCPKG_ROOT }
     $vcpkg_name = split-path -leaf $vcpkg_dir
@@ -502,28 +522,13 @@ function update_vcpkg([string]$toolkit = '') {
 
         popd
     }
-
-    if (-not (test-path $REPOS_ROOT/vcpkg-binpkg-prototype)) {
-        pushd $REPOS_ROOT
-
-        git clone git@github.com:rkitover/vcpkg-binpkg-prototype
-
-        popd
-    }
-
-    pushd $REPOS_ROOT/vcpkg-binpkg-prototype
-
-    git pull --rebase
-
-    popd
-
-    import-module -global -force "$REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 }
 
 $script:current_arch      = $null
 $script:current_toolchain = $null
 $script:current_toolkit   = $null
 $script:updated_toolkits  = @{}
+$script:updated_binpkg    = $false
 
 function rewrite_vcpkg_root([string]$old_root, [string]$new_root) {
     set-alias -force -scope global vcpkg (join-path $new_root $(if ($iswindows) { 'vcpkg.exe' } else { 'vcpkg' }))
@@ -546,6 +551,13 @@ function rewrite_vcpkg_root([string]$old_root, [string]$new_root) {
 }
 
 function setup_build_env([string]$triplet, [string]$toolkit = '') {
+    # Before the early return below: the packaging commands are wanted on every
+    # platform, and off Windows this is the only part of the setup that runs.
+    if (-not $script:updated_binpkg) {
+        $script:updated_binpkg = $true
+        update_binpkg_module
+    }
+
     if (-not $iswindows) { return }
 
     $triplet -match '^([^-]+)-([^-]+)' | out-null
@@ -596,6 +608,9 @@ function teardown_build_env {
     $script:current_toolchain = $null
     $script:current_toolkit   = $null
     $script:updated_toolkits.clear()
+    # $script:updated_binpkg is deliberately not reset: an imported module is
+    # not part of the environment restore_env puts back, so a later
+    # setup_build_env would only re-clone and re-import what is already here.
 }
 
 function get-triplets {
