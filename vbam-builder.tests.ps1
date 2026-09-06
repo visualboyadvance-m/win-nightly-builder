@@ -892,4 +892,142 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
     }
 }
 
+# ── get-triplets argument parsing ───────────────────────────────────
+#
+# No Visual Studio needed: get-triplets only reads its arguments and
+# $TRIPLETS, so this runs everywhere the module loads.
+
+describe 'get-triplets' {
+
+    describe 'toolkit selection' {
+
+        it 'builds only the named toolkit with --toolkit' {
+            $a = @('--triplets', 'x64-windows-static,x86-windows', '--toolkit', 'v143')
+            $out = get-triplets @a
+            @($out).count | should -be 2
+            @($out | %{ $_.Toolkits }) | should -be @('v143', 'v143')
+        }
+
+        it 'accepts the --toolkit=<value> spelling too' {
+            $a = @('--triplets', 'x64-windows-static', '--toolkit=v143')
+            (get-triplets @a).Toolkits | should -be @('v143')
+        }
+
+        it 'keeps the default pair when no toolkit is asked for' {
+            # An x86/x64 Windows triplet is built twice, once per toolset.
+            $a = @('--triplets', 'x64-windows-static')
+            (get-triplets @a).Toolkits | should -be @('', 'v143')
+        }
+
+        it 'gives other triplets a single default toolkit' {
+            $a = @('--triplets', 'arm64-windows-static')
+            (get-triplets @a).Toolkits | should -be @('')
+        }
+
+        it 'takes --toolkit alone to mean the triplets that toolkit is for' {
+            # Not "every default triplet, built with v143": the mingw and
+            # arm64 ones have no v143 to select.
+            $a = @('--toolkit', 'v143')
+            @(get-triplets @a | %{ "$_" }) | should -be @(
+                'x64-windows', 'x64-windows-static', 'x86-windows', 'x86-windows-static'
+            )
+        }
+
+        it 'gives each of those only the named toolkit' {
+            $a = @('--toolkit', 'v143')
+            $out = get-triplets @a
+            @($out | %{ $_.Toolkits }) | should -be @('v143', 'v143', 'v143', 'v143')
+        }
+
+        it 'leaves no mingw or arm64 triplet in a --toolkit-only selection' {
+            $a = @('--toolkit', 'v143')
+            @(get-triplets @a | %{ "$_" }) | should -not -contain 'x86-mingw-static'
+            @(get-triplets @a | %{ "$_" }) | should -not -contain 'arm64-windows-static'
+        }
+
+        it 'allows an explicit --triplets that does support the toolkit' {
+            $a = @('--triplets', 'x86-windows', '--toolkit', 'v143')
+            @(get-triplets @a | %{ "$_" }) | should -be @('x86-windows')
+        }
+
+        it 'rejects a named triplet the toolkit does not apply to' {
+            # The default list is filtered instead, but naming one outright
+            # is a mistake: there is no v143 to build arm64 with.
+            $a = @('--triplets', 'arm64-windows-static', '--toolkit', 'v143')
+            { get-triplets @a } |
+                should -throw -expectedmessage "*toolkit 'v143' does not apply to: arm64-windows-static*"
+        }
+
+        it 'names every unsupported triplet, not just the first' {
+            $a = @('--triplets', 'arm64-windows-static,x86-mingw-static', '--toolkit', 'v143')
+            { get-triplets @a } |
+                should -throw -expectedmessage '*arm64-windows-static, x86-mingw-static*'
+        }
+
+        it 'rejects a mixed list containing an unsupported triplet' {
+            $a = @('--triplets', 'x64-windows,arm64-windows', '--toolkit', 'v143')
+            { get-triplets @a } | should -throw -expectedmessage '*does not apply to: arm64-windows*'
+        }
+    }
+
+    describe 'triplet selection' {
+
+        it 'splits a comma separated --triplets' {
+            $a = @('--triplets', 'x64-windows-static,x86-windows')
+            @(get-triplets @a | %{ "$_" }) | should -be @('x64-windows-static', 'x86-windows')
+        }
+
+        it 'takes --triplets as separate words' {
+            $a = @('--triplets', 'x64-windows-static', 'x86-windows')
+            @(get-triplets @a | %{ "$_" }) | should -be @('x64-windows-static', 'x86-windows')
+        }
+
+        it 'falls back to $TRIPLETS when none are named' {
+            # $TRIPLETS is deliberately not exported, so that callers have to
+            # come through get-triplets; read it from the module's own scope.
+            $expected = & $script:vbam { $TRIPLETS }
+            @(get-triplets | %{ "$_" }) | should -be @($expected)
+        }
+    }
+
+    describe 'unknown arguments' {
+
+        # These used to be dropped in silence, so "--tolkit v143" left the
+        # toolkit unset and the run built both toolsets -- twice the work
+        # asked for, with nothing said about why.
+
+        it 'rejects a misspelled option' {
+            $a = @('--triplets', 'x64-windows-static', '--tolkit', 'v143')
+            { get-triplets @a } | should -throw -expectedmessage "*unknown argument '--tolkit'*"
+        }
+
+        it 'rejects a bare argument that is not attached to --triplets' {
+            { get-triplets 'x64-windows-static' } |
+                should -throw -expectedmessage "*unknown argument 'x64-windows-static'*"
+        }
+
+        it 'names the expected options in the error' {
+            { get-triplets '--nonsense' } | should -throw -expectedmessage '*--triplets, --toolkit, --android or --force*'
+        }
+
+        it 'accepts -f, which the callers read themselves and forward' {
+            # vcpkg-daily.ps1 and build-nightly.ps1 both take -f/--force off
+            # their own $args and then pass everything through to here.
+            $a = @('-f', '--triplets', 'x64-windows-static')
+            { get-triplets @a } | should -not -throw
+        }
+
+        it 'accepts --force as well' {
+            $a = @('--force', '--triplets', 'x64-windows-static')
+            (get-triplets @a).Toolkits | should -be @('', 'v143')
+        }
+
+        it 'does not treat --android as unknown' -skip:(-not $IsWindows) {
+            # On Windows it is refused, but for being the wrong platform
+            # rather than for being unrecognized.
+            { get-triplets '--android' } | should -throw -expectedmessage '*only built on Linux and macOS*'
+        }
+    }
+}
+
 # vim:set sw=4 et:

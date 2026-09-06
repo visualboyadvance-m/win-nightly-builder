@@ -636,6 +636,18 @@ function get-triplets {
         elseif ($args[$i] -match '^--?triplets?$') {
             while ($i+1 -lt $args.count -and $args[$i+1] -notmatch '^-') { $triplet_args += $args[++$i] -split '[,\s]+' | ?{ $_ } }
         }
+        # -f/--force is the callers' own: vcpkg-daily.ps1 and build-nightly.ps1
+        # each read it off their $args and then forward the lot here, so accept
+        # and ignore it rather than making every caller filter it out first.
+        elseif ($args[$i] -match '^--?f(orce)?$')                            { }
+        else {
+            # Anything else is a mistake, not something to drop. This loop used
+            # to ignore what it did not recognize, so "--tolkit v143" left the
+            # toolkit unset and every x86/x64 Windows triplet kept its default
+            # pair -- the run built both toolsets, twice the work asked for,
+            # and said nothing about why.
+            write-error ("get-triplets: unknown argument '" + $args[$i] + "'; expected --triplets, --toolkit, --android or --force") -ea stop
+        }
     }
 
     $requested_triplets = $triplet_args | %{ $_.tolower() } | %{
@@ -650,7 +662,22 @@ function get-triplets {
         }
     } | select -unique
 
-    if (-not $requested_triplets) { $requested_triplets = $TRIPLETS }
+    # Which triplets a toolkit other than the default is defined for. The
+    # filter just below and the assignment further down both need to agree on
+    # that, so say it once.
+    $toolkit_triplet_re = '^x(64|86)-windows(-static)?$'
+
+    if (-not $requested_triplets) {
+        # --toolkit on its own means "the triplets that toolkit is for", not
+        # "all of them, built with it". A mingw or arm64 triplet has no v143
+        # to select, and building one under a toolkit that does not apply to
+        # it is never what was meant.
+        $requested_triplets = if ($toolkit) {
+            @($TRIPLETS | ?{ $_ -match $toolkit_triplet_re })
+        } else {
+            $TRIPLETS
+        }
+    }
 
     if ($android) {
         if (-not ($islinux -or $ismacos)) {
@@ -660,10 +687,23 @@ function get-triplets {
         $requested_triplets = @($requested_triplets) + @($ANDROID_TRIPLETS) | select -unique
     }
 
+    # Every triplet actually about to be built has to support the toolkit that
+    # was asked for. Naming one that does not is a mistake worth stopping on
+    # rather than building under a toolkit that means nothing to it: only the
+    # default list is filtered above, on the grounds that naming triplets says
+    # which are wanted, so this is where an explicit --triplets gets checked.
+    if ($toolkit) {
+        $unsupported = @($requested_triplets | ?{ $_ -notmatch $toolkit_triplet_re })
+
+        if ($unsupported) {
+            write-error ("get-triplets: toolkit '" + $toolkit + "' does not apply to: " + ($unsupported -join ', ')) -ea stop
+        }
+    }
+
     foreach ($t in $requested_triplets) {
         $tks = if ($toolkit) {
             @($toolkit)
-        } elseif ($t -match '^x(64|86)-windows(-static)?$') {
+        } elseif ($t -match $toolkit_triplet_re) {
             @('', 'v143')
         } else {
             @('')
