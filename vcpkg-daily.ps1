@@ -363,6 +363,9 @@ teardown_build_env
 
 $build_triplets = @($build_triplets) + @($extra_triplets)
 
+# Packages sftp could not put, filled in by the upload jobs below.
+$upload_failures = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
+
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
         $pkg_subdir  = if ($tk) { "$triplet/$tk" } else { $triplet }
@@ -384,13 +387,24 @@ foreach ($triplet in $build_triplets) {
         $existing_pkgs = @('ls -1' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | %{
             if ($_ -match '^\s*([^_\s]+)_[^_\s]+_[^_\s]+\.zip\s*$') { $matches[1] }
         }) | select-object -unique
-        gci $pkg_subdir_abs -filter '*.zip' | %{
-            start-threadjob -throttlelimit 3 -argumentlist $_ -scriptblock {
-                param($_)
-                $zip_name = $_.Name
-                $zip_full = $_.FullName
-                $pkg      = $zip_name -replace '^([^_]+).*', '$1'
-                $rdir     = $using:remote_dir
+        # One sftp session per chunk of packages rather than one per package.
+        # Every connection is another chance at the teardown bug handled
+        # below, and a triplet has dozens of packages, so a run was doing
+        # dozens of connects and disconnects where three will do.
+        $upload_throttle = 3
+        $zips = @(gci $pkg_subdir_abs -filter '*.zip')
+        $chunks = @()
+        if ($zips.count) {
+            $chunk_size = [math]::max(1, [math]::ceiling($zips.count / $upload_throttle))
+            for ($z = 0; $z -lt $zips.count; $z += $chunk_size) {
+                $chunks += ,@($zips[$z..([math]::min($z + $chunk_size - 1, $zips.count - 1))])
+            }
+        }
+
+        $chunks | %{
+            start-threadjob -throttlelimit $upload_throttle -argumentlist (,$_) -scriptblock {
+                param($chunk)
+                $rdir = $using:remote_dir
 
                 # sftp reads this batch a line at a time, so write LF
                 # whatever the builder: add-content ends lines the platform's
@@ -399,16 +413,45 @@ foreach ($triplet in $build_triplets) {
                 # which a thread job's runspace does not see, so write inline.
                 $batch = new-temporaryfile
                 $batch_lines = @()
-                if ($pkg -in $using:existing_pkgs) {
-                    $batch_lines += "rm $rdir/${pkg}_*"
+                foreach ($zip in $chunk) {
+                    $zip_name = $zip.Name
+                    $pkg      = $zip_name -replace '^([^_]+).*', '$1'
+                    if ($pkg -in $using:existing_pkgs) {
+                        # Leading "-" so sftp keeps going: one glob that
+                        # matches nothing would otherwise abandon the rest of
+                        # the chunk, which now holds other packages too.
+                        $batch_lines += "-rm $rdir/${pkg}_*"
+                    }
+                    $batch_lines += "put $($zip.FullName) $rdir/$zip_name"
+                    $batch_lines += "chmod 664 $rdir/$zip_name"
                 }
-                $batch_lines += "put $zip_full $rdir/$zip_name"
-                $batch_lines += "chmod 664 $rdir/$zip_name"
 
                 [io.file]::WriteAllText($batch.FullName, (($batch_lines -join "`n") + "`n"))
 
-                sftp -b $batch sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/
+                # On disconnect sftp can report "close - IO is still pending
+                # on closed socket" -- a client-side Win32 OpenSSH bug
+                # (Win32-OpenSSH#1899), emitted after the transfers, with an
+                # exit status of 0. It goes to stderr, and a native command's
+                # stderr inside a thread job becomes an error record that
+                # receive-job re-raises in the parent, where
+                # erroractionpreference stop then killed the whole run --
+                # having already uploaded the files. So capture it and judge
+                # by the exit status, which is what actually says whether the
+                # puts worked.
+                $sftp_out  = sftp -b $batch sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/ 2>&1 | out-string
+                $sftp_code = $LASTEXITCODE
+
                 remove-item $batch
+
+                if ($sftp_code -ne 0) {
+                    foreach ($zip in $chunk) {
+                        ($using:upload_failures).Add("$($zip.Name) ($using:remote_dir)")
+                    }
+                    write-warning "sftp exited $sftp_code uploading to $rdir; these are not published: $(($chunk | % Name) -join ', ')`n$($sftp_out.trim())"
+                }
+                else {
+                    "Uploaded $($chunk.count) package(s) to $rdir."
+                }
             }
         } | receive-job -wait -autoremovejob
     }
@@ -426,6 +469,10 @@ if ($build_failures) {
 
 if ($pack_failures.count) {
     "WARNING: packaging skipped for: $((@($pack_failures) | sort-object -unique) -join ', ')"
+}
+
+if ($upload_failures.count) {
+    "WARNING: failed to upload: $((@($upload_failures) | sort-object -unique) -join ', ')"
 }
 
 'INFO: vcpkg packages upgrade successful!'
