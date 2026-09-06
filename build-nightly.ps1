@@ -69,7 +69,7 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
 
     $sources_changed = $(
 	git diff --name-only "${head}..${current}" `
-	    | & $grep -cE 'cmake|CMake|\.(c|cpp|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
+	    | & $grep -cE 'cmake|CMake|\.(c|cpp|java|h|in|xrc|xml|rc|cmd|xpm|ico|icns|png|svg)$' `
     )
 
     $translations_changed = $(
