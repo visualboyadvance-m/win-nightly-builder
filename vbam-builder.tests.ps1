@@ -1171,6 +1171,63 @@ describe 'get_host_ports' {
         "$warnings" | should -belike '*riscv64-android*x64-windows*no such triplet*'
     }
 
+    it 'calls the plan source again rather than caching a supplied one' {
+        # The real source is read once per triplet and kept -- the same plan
+        # answers -Tools -- but a plan handed in here is never cached, or one
+        # test would be answering the next one's question.
+        $calls = 0
+        $src   = { param($t) $global:LASTEXITCODE = 0; $script:calls++; @('  * zlib:x64-windows@1.3.2') }
+        get_host_ports 'arm64-android' 'x64-windows' $src | out-null
+        get_host_ports 'arm64-android' 'x64-windows' $src | out-null
+        $script:calls | should -be 2
+    }
+
+    describe '-Tools' {
+
+        # What a plan puts on the host and nowhere else is there to build with:
+        # the script ports, pkgconf, ffmpeg-bin2c. Those must stay out of a
+        # vcpkg upgrade, which would rebuild every installed package that
+        # depends on them -- which is all of them.
+        # In a beforeall, not beside the describe: a variable assigned in a
+        # block body is set during discovery, and the it blocks run later
+        # without it.
+        beforeall {
+            $host_plan = @(
+                'The following packages will be built and installed:'
+                '  * qtbase[core,gui]:arm64-android@6.11.2'
+                '  * qtbase[core,gui]:x64-windows@6.11.2'
+                '  * dbus:x64-windows@1.16.2#5'
+                '  * vcpkg-cmake:x64-windows@2025-08-07'
+                '  * zlib:arm64-android@1.3.2#2'
+            )
+        }
+
+        it 'leaves the tooling in the full answer' {
+            get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $host_plan }) |
+                should -be @('qtbase[gui]', 'dbus', 'vcpkg-cmake')
+        }
+
+        it 'narrows to what the plan puts on the host alone' {
+            get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $host_plan }) -Tools |
+                should -be @('dbus', 'vcpkg-cmake')
+        }
+
+        it 'does not call a port a tool for being on the host under another name' {
+            # qtbase is built for the host and for the target, so it is a
+            # library the cross build needs a host copy of, not tooling.
+            get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $host_plan }) -Tools |
+                should -not -contain 'qtbase[gui]'
+        }
+
+        it 'calls everything tooling when nothing is built for the target' {
+            # Which is a cross-compiled Windows target: its host side is the
+            # build tools and nothing else.
+            $native = @('  * pkgconf:arm64-windows@3.0.3', '  * vcpkg-make:arm64-windows@2026-07-09')
+            get_host_ports 'arm64-windows-static' 'arm64-windows' (plan_source @{ '*' = $native }) -Tools |
+                should -be @('pkgconf', 'vcpkg-make')
+        }
+    }
+
     it 'returns nothing when no plan mentions the host triplet' {
         # Which is how a triplet that needs nothing on the host -- a native
         # build -- comes out.

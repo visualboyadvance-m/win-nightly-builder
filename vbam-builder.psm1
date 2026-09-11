@@ -734,6 +734,10 @@ function get_dep_ports([string]$triplet = '') {
     if ($triplet -match '-android$') { $ANDROID_DEP_PORTS } else { $DEP_PORTS }
 }
 
+# Plans already read, keyed by triplet, host triplet and the tree they came
+# from. See get_host_ports below.
+$script:host_plans = @{}
+
 # The host packages a build of $triplets puts on $host_triplet, as vcpkg
 # install specs: the port name plus whatever features the plan asks for. Every
 # triplet is planned with its own port list and the results are unioned, so
@@ -761,10 +765,22 @@ function get_dep_ports([string]$triplet = '') {
 # and without an NDK, which is what makes this usable on a host that has
 # neither.
 #
+# -Tools narrows the answer to the build tooling among those packages: the
+# ports the plan puts on the host and nowhere else, which are there to build
+# with rather than to link against -- vcpkg-cmake and the other script ports,
+# pkgconf, ffmpeg-bin2c. They are wanted in the build like the rest, and wanted
+# out of any `vcpkg upgrade`, which rebuilds the named port and every installed
+# package that depends on it: everything declares the script ports as host
+# dependencies, so upgrading one by name on a host triplet rebuilds that whole
+# tree, ports no list names any more included. A leftover sdl2 on the macOS
+# builder was rebuilt that way, from a faudio that has since moved to SDL3.
+#
 # $plan_for is where the plan comes from, one triplet at a time. It is a
 # parameter so the parsing below can be checked against a captured plan
-# without a vcpkg to run; nothing but the tests passes it.
-function get_host_ports([string[]]$triplets, [string]$host_triplet, [scriptblock]$plan_for = $null) {
+# without a vcpkg to run; nothing but the tests passes it, and a plan it
+# supplies is never cached.
+function get_host_ports([string[]]$triplets, [string]$host_triplet,
+                        [scriptblock]$plan_for = $null, [switch]$Tools) {
     # The plan is captured with 2>&1 so a failure can be reported with what
     # vcpkg said about it. Under Windows PowerShell -- which is what the
     # scheduled task runs -- a native command's redirected stderr becomes an
@@ -798,32 +814,48 @@ function get_host_ports([string[]]$triplets, [string]$host_triplet, [scriptblock
     # a build of this put on that host.
     $plan_root = join-path $env:TEMP 'vbam-host-plan-root'
 
-    if (-not $plan_for) {
-        $plan_for = {
-            param($t)
+    $default_plan_for = {
+        param($t)
 
-            $ports = @(get_dep_ports $t)
+        $ports = @(get_dep_ports $t)
 
-            vcpkg install --dry-run @overlay_args --x-install-root=$plan_root `
-                --triplet $t --host-triplet $host_triplet `
-                --allow-unsupported --recurse @ports 2>&1
-        }
+        vcpkg install --dry-run @overlay_args --x-install-root=$plan_root `
+            --triplet $t --host-triplet $host_triplet `
+            --allow-unsupported --recurse @ports 2>&1
     }
 
-    $features = [ordered]@{}
+    $features     = [ordered]@{}
+    # Ports the plan puts on some triplet other than the host's: what the build
+    # links against rather than what it builds with. -Tools is everything in
+    # $features that never turns up here.
+    $target_ports = @{}
 
     foreach ($t in $triplets) {
-        $plan = & $plan_for $t
+        # The same plan answers both the full question and -Tools, and a host
+        # triplet is asked about once per toolkit, so read vcpkg once and keep
+        # it. The tree it was read from is part of the key: on Windows every
+        # toolkit has its own, and VCPKG_ROOT is what setup_build_env moves.
+        $key  = "$t|$host_triplet|$env:VCPKG_ROOT|$env:VCPKG_OVERLAY_PORTS"
+        $plan = $null
 
-        # One triplet vcpkg cannot plan is not worth failing a nightly over:
-        # riscv64-android is the one that can go missing, and the host set
-        # barely differs between Android architectures, so the others cover it.
-        # Name the triplet anyway, so one that quietly stops resolving is still
-        # visible in the log.
-        if ($lastexitcode -ne 0) {
-            write-warning ("could not compute the $t host deps for ${host_triplet}: " +
-                           ((@($plan | %{ "$_" }) -join "`n").trim()))
-            continue
+        if ((-not $plan_for) -and $script:host_plans.contains($key)) {
+            $plan = $script:host_plans[$key]
+        }
+        else {
+            $plan = & $(if ($plan_for) { $plan_for } else { $default_plan_for }) $t
+
+            # One triplet vcpkg cannot plan is not worth failing a nightly
+            # over: riscv64-android is the one that can go missing, and the
+            # host set barely differs between Android architectures, so the
+            # others cover it. Name the triplet anyway, so one that quietly
+            # stops resolving is still visible in the log.
+            if ($lastexitcode -ne 0) {
+                write-warning ("could not compute the $t host deps for ${host_triplet}: " +
+                               ((@($plan | %{ "$_" }) -join "`n").trim()))
+                continue
+            }
+
+            if (-not $plan_for) { $script:host_plans[$key] = $plan }
         }
 
         foreach ($line in $plan) {
@@ -831,11 +863,12 @@ function get_host_ports([string[]]$triplets, [string]$host_triplet, [scriptblock
             # after the version for an overlay port. Both the packages the plan
             # would build and the ones it reports already installed are wanted:
             # naming an installed one is what keeps it upgraded and packaged.
-            if ("$line" -notmatch ('^\s*\*?\s*([^\s:\[\]]+)(?:\[([^\]]*)\])?:' +
-                                   [regex]::escape($host_triplet) + '@')) { continue }
+            if ("$line" -notmatch '^\s*\*?\s*([^\s:\[\]]+)(?:\[([^\]]*)\])?:([^\s@]+)@') { continue }
 
             $port = $matches[1]
             $fs   = @($matches[2] -split ',' | %{ $_.trim() } | ?{ $_ })
+
+            if ($matches[3] -ne $host_triplet) { $target_ports[$port] = $true; continue }
 
             if (-not $features.contains($port)) { $features[$port] = [ordered]@{} }
 
@@ -853,6 +886,8 @@ function get_host_ports([string[]]$triplets, [string]$host_triplet, [scriptblock
     }
 
     foreach ($port in $features.keys) {
+        if ($Tools -and $target_ports.contains($port)) { continue }
+
         if ($features[$port].count) { "$port[$(@($features[$port].keys) -join ',')]" } else { $port }
     }
 }

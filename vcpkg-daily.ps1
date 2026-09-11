@@ -210,6 +210,26 @@ foreach ($triplet in $build_triplets) {
         $build_ports      = $build_ports + $android_host
         $build_port_names = @($build_ports -replace '\[[^\]]+\]','')
 
+        # The build tooling among what that added -- vcpkg-cmake and the other
+        # script ports, pkgconf, ffmpeg-bin2c -- is built and packaged like the
+        # rest of it but never upgraded by name. vcpkg upgrade rebuilds the port
+        # it is given and every installed package that depends on it, and every
+        # port declares the script ports as host dependencies, so upgrading one
+        # for a host triplet rebuilds that entire tree -- ports no list names any
+        # more included. A leftover sdl2 on the macOS builder, from a faudio that
+        # has since moved to SDL3, was rebuilt and republished every night that
+        # way. They come back fresh on their own the moment a port that needs a
+        # newer one is rebuilt.
+        #
+        # Only what the Android host halves added: a port the triplet's own list
+        # names is upgraded by name as it always was.
+        $android_host_names = @($android_host -replace '\[[^\]]+\]','')
+        $host_tools         = @(if ($android_host) {
+            @(get_host_ports $ANDROID_TRIPLETS $triplet -Tools) -replace '\[[^\]]+\]','' |
+                ?{ $_ -in $android_host_names }
+        })
+        $upgrade_port_names = @($build_port_names | ?{ $_ -notin $host_tools })
+
         # vcpkg install treats a dependency as satisfied when a package of that
         # name is installed for that triplet: it never compares what is
         # installed against the ports tree. A cross build therefore configures
@@ -236,7 +256,7 @@ foreach ($triplet in $build_triplets) {
             vcpkg --triplet $triplet --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $port
         }
 
-        foreach ($port in $build_port_names) {
+        foreach ($port in $upgrade_port_names) {
             vcpkg --triplet $triplet --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
         }
 
@@ -297,30 +317,38 @@ foreach ($triplet in $build_triplets) {
         # which toolset built them changes nothing about what they do.
         $is_android = "$triplet" -in $ANDROID_TRIPLETS
 
-        if (-not $packages -and -not $tk -and $host_t -and
-            ($is_android -or (($triplet -split '-')[0] -ne ($host_t -split '-')[0]))) {
-            if ($is_android) {
-                # Android is never a host. Nothing on the device runs moc or
-                # androiddeployqt, so there is no "<target arch>-<host os>"
-                # machine to build host tools for -- deriving one the way the
-                # branch below does would cross-build a Linux host's tool
-                # closure, X11 and all, for an arm64-linux nobody consumes.
-                # The host tools an Android build needs are the ones on the
-                # machine doing the building, so stay on the host triplet.
-                #
-                # A host triplet in this run has already built these from its
-                # own list. Doing it again here is what covers the run that
-                # builds the Android targets and no host triplet at all.
-                $target_host_t = $host_t
-            }
-            else {
-                # Derive the native host triplet for the target arch: same OS as
-                # the build host but the target's own architecture.
-                $target_arch   = ($triplet.ToString() -split '-')[0]
-                $host_os       = ($host_t -split '-')[1]
-                $target_host_t = "$target_arch-$host_os"
-            }
+        if ($is_android) {
+            # Android is never a host. Nothing on the device runs moc or
+            # androiddeployqt, so there is no "<target arch>-<host os>" machine
+            # to build host tools for -- deriving one the way the branch below
+            # does would cross-build a Linux host's tool closure, X11 and all,
+            # for an arm64-linux nobody consumes. The host tools an Android
+            # build needs are the ones on the machine doing the building, so
+            # stay on the host triplet.
+            #
+            # A host triplet in this run has already built these from its own
+            # list. Doing it again here is what covers the run that builds the
+            # Android targets and no host triplet at all.
+            $target_host_t = "$host_t"
+        }
+        else {
+            # Derive the native host triplet for the target arch: same OS as
+            # the build host but the target's own architecture.
+            $target_arch   = ($triplet.ToString() -split '-')[0]
+            $host_os       = ($host_t -split '-')[1]
+            $target_host_t = "$target_arch-$host_os"
+        }
 
+        # Nothing to do when that machine is the triplet itself. A plain host
+        # triplet stands in for its own machine -- arm64-windows is what an
+        # arm64-windows build is hosted on, x64-osx what an x64-osx build is --
+        # and its own pass above has just built it from the list that pins its
+        # features. Asking the plan about it would match every line of that
+        # plan, target and host triplet being one string by then, and hand back
+        # the whole target graph as host deps with every [core] pin stripped
+        # back to the port's defaults.
+        if (-not $packages -and -not $tk -and $host_t -and ("$target_host_t" -ne "$triplet") -and
+            ($is_android -or (($triplet -split '-')[0] -ne ($host_t -split '-')[0]))) {
             # The question the host triplets' own lists answer above, asked of
             # this target: what would building it put on that host? vcpkg's plan
             # answers it for the whole graph, so the host deps of ports nobody
@@ -337,6 +365,9 @@ foreach ($triplet in $build_triplets) {
             # never published, since only the direct set was packaged.
             $host_ports      = @(get_host_ports $triplet $target_host_t)
             $host_port_names = @($host_ports -replace '\[[^\]]+\]','')
+            # Built and packaged, never upgraded by name, for the reason the
+            # Android host halves above are not.
+            $th_tools        = @(get_host_ports $triplet $target_host_t -Tools) -replace '\[[^\]]+\]',''
 
             if ($host_ports) {
                 "Building host deps for $target_host_t (cross target: $triplet): $($host_ports -join ', ')"
@@ -346,7 +377,7 @@ foreach ($triplet in $build_triplets) {
                 foreach ($dep in $host_ports) {
                     vcpkg --triplet $target_host_t --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
                 }
-                foreach ($dep in $host_port_names) {
+                foreach ($dep in @($host_port_names | ?{ $_ -notin $th_tools })) {
                     vcpkg --triplet $target_host_t --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
                 }
 
