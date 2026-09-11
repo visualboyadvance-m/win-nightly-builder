@@ -92,7 +92,14 @@ $ALL_DEP_PORT_NAMES = @($DEP_PORT_NAMES) + @($ANDROID_DEP_PORT_NAMES) | select-o
 $TRIPLETS       = if ($iswindows) {
 		      'x86-mingw-static','x64-mingw-static',(echo x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }) | echo
 		  } elseif ($islinux) {
-		      'x64-linux'
+		      # Native only: vcpkg's linux triplets name a target architecture
+		      # but no toolchain, so building the other one would need a cross
+		      # compiler and a full sysroot. Build whichever the host already is.
+		      if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') {
+			  'arm64-linux'
+		      } else {
+			  'x64-linux'
+		      }
 		  } elseif ($ismacos) {
 		      'x64-osx','arm64-osx'
 		  }
