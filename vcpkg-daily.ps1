@@ -45,6 +45,33 @@ function selected_ports([string]$triplet) {
     @($ports)
 }
 
+# The host halves of the Android cross builds, for a triplet that can host one.
+# The targets themselves are built on Linux and macOS under --android and take
+# their host tools from the machine doing the building; this is that same set of
+# packages, built and published for every host this platform defines, so an
+# Android build hosted on any of them -- x64-windows, arm64-windows and
+# x86-windows on Windows, whichever of them this builder itself runs on -- can
+# fetch its Qt tools instead of compiling them. No desktop build asks for any of
+# it, which is why a default run has to name them.
+function android_host_ports([string]$triplet) {
+    if ("$triplet" -notin $HOST_TRIPLETS) { return @() }
+
+    $ports = @(get_host_ports $ANDROID_TRIPLETS $triplet)
+
+    # A port the triplet's own list already names keeps that list's spec: its
+    # features are the ones the emulator's CMakeLists asks for, and naming one
+    # port twice with two feature sets only has vcpkg rebuild it back and forth.
+    $own   = @(get_dep_ports $triplet) -replace '\[[^\]]+\]',''
+    $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $own }
+
+    # The same filters the triplet's own list gets: these are part of what a
+    # host triplet builds, so --packages/--skip-packages select within them too.
+    if ($packages)      { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -in $packages } }
+    if ($skip_packages) { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $skip_packages } }
+
+    @($ports)
+}
+
 $selected_port_names = @($build_triplets | %{ selected_ports $_ }) -replace '\[[^\]]+\]','' | select-object -unique
 
 "INFO: vcpkg packages upgrade started on $(date)."
@@ -143,14 +170,30 @@ $pack_failures      = [System.Collections.Concurrent.ConcurrentBag[string]]::new
 $build_failures     = @()
 
 foreach ($triplet in $build_triplets) {
-    $build_ports      = selected_ports $triplet
-    $build_port_names = @($build_ports -replace '\[[^\]]+\]','')
-
     foreach ($tk in $triplet.toolkits) {
         setup_build_env $triplet $tk
 
         if (-not $binpkg_module) { $binpkg_module = (get-module vcpkg-binpkg).path }
         $host_t = get_host_triplet
+
+        $build_ports = @(selected_ports $triplet)
+
+        # The default toolkit only. What these packages provide is build tools
+        # -- moc, rcc, androiddeployqt -- that nothing links against, so which
+        # toolset built them changes nothing about what they do, and a second
+        # copy under v143 would only be another Qt build.
+        #
+        # Inside the toolkit loop even so: the set comes out of a vcpkg install
+        # plan, and setup_build_env has just pointed VCPKG_ROOT at the tree
+        # that plan should be read from.
+        $android_host = @(if (-not $tk) { android_host_ports $triplet })
+
+        if ($android_host) {
+            "Adding the Android host deps to ${triplet}: $($android_host -join ', ')"
+        }
+
+        $build_ports      = $build_ports + $android_host
+        $build_port_names = @($build_ports -replace '\[[^\]]+\]','')
 
         # vcpkg install treats a dependency as satisfied when a package of that
         # name is installed for that triplet: it never compares what is
@@ -229,12 +272,18 @@ foreach ($triplet in $build_triplets) {
             }
         } | receive-job -wait -autoremovejob
 
-        # For cross-compiling triplets, build host-tool dependencies for the
-        # target architecture's native host triplet (e.g. arm64-windows for an
-        # arm64-windows-static target) so they are usable on the target machine.
+        # For cross-compiling triplets, build the host-tool dependencies for
+        # the target architecture's native host triplet (e.g. arm64-windows for
+        # an arm64-windows-static target) so they are usable on the target
+        # machine.
+        #
+        # The default toolkit only, for the reason the Android host halves above
+        # are: what these provide is build tools that nothing links against, so
+        # which toolset built them changes nothing about what they do.
         $is_android = "$triplet" -in $ANDROID_TRIPLETS
 
-        if (-not $packages -and $host_t -and ($is_android -or (($triplet -split '-')[0] -ne ($host_t -split '-')[0]))) {
+        if (-not $packages -and -not $tk -and $host_t -and
+            ($is_android -or (($triplet -split '-')[0] -ne ($host_t -split '-')[0]))) {
             if ($is_android) {
                 # Android is never a host. Nothing on the device runs moc or
                 # androiddeployqt, so there is no "<target arch>-<host os>"
@@ -243,6 +292,10 @@ foreach ($triplet in $build_triplets) {
                 # closure, X11 and all, for an arm64-linux nobody consumes.
                 # The host tools an Android build needs are the ones on the
                 # machine doing the building, so stay on the host triplet.
+                #
+                # A host triplet in this run has already built these from its
+                # own list. Doing it again here is what covers the run that
+                # builds the Android targets and no host triplet at all.
                 $target_host_t = $host_t
             }
             else {
@@ -253,106 +306,74 @@ foreach ($triplet in $build_triplets) {
                 $target_host_t = "$target_arch-$host_os"
             }
 
-            # Every port installed for the triplet, not just the ones named in
-            # the port list. A host dependency belongs to the port that declares
-            # it, and the ones that matter here are declared by ports nobody
-            # names: icu arrives under qtbase and asks for icu on the host to
-            # cross-build its data, and vcpkg-instpkg on the consuming side
-            # insists on the build dependencies of every zip it installs,
-            # transitive ones included. Filtering to the named ports left those
-            # unbuilt and unpublished, so a consumer restoring the target zip
-            # was told its database was corrupt -- icu:arm64-android installed,
-            # icu:x64-linux not -- and built a host icu to fix it.
-            $installed = vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' }
-            if ($installed) {
-                $qualified = @($installed | %{ "${_}:$triplet" })
+            # The question the host triplets' own lists answer above, asked of
+            # this target: what would building it put on that host? vcpkg's plan
+            # answers it for the whole graph, so the host deps of ports nobody
+            # names are in it -- icu arrives under qtbase and asks for icu on
+            # the host to cross-build its data -- which is what the walk over
+            # every installed package here used to be for.
+            #
+            # It also makes what to build and what to publish one list. A
+            # consumer restoring the host Qt needs what that Qt was built
+            # against -- libb2, md4c, double-conversion, egl, libpq, sqlite3 --
+            # or vcpkg-instpkg prunes it as incomplete, prunes the target Qt
+            # that names it, and the build compiles Qt from source for both.
+            # Those arrived as dependencies of the direct host deps and were
+            # never published, since only the direct set was packaged.
+            $host_ports      = @(get_host_ports $triplet $target_host_t)
+            $host_port_names = @($host_ports -replace '\[[^\]]+\]','')
 
-                # The host dependency that matters for Android is Qt: vcpkg
-                # builds qtbase and qttools for the host while building them
-                # for the target, and no desktop build asks for either, so
-                # without this an Android builder has no host Qt to fetch.
-                # -Direct stops there. The full closure is what a bare host
-                # needs to build those tools from nothing, which is the right
-                # answer for the cross-Windows targets below and the wrong one
-                # here: under a host Qt it reaches the whole desktop stack --
-                # fontconfig, dbus, libsystemd -- that the host already has and
-                # no APK put there.
-                $host_deps = @(
-                    if ($is_android) { vcpkg-listhostdeps -Direct @qualified }
-                    else             { vcpkg-listhostdeps         @qualified }
-                ) | ?{ $_ } | select-object -unique
+            if ($host_ports) {
+                "Building host deps for $target_host_t (cross target: $triplet): $($host_ports -join ', ')"
 
-                if ($host_deps) {
-                    $target_host_tks = @(get-triplets @filtered_args "--triplets=$target_host_t")[0].Toolkits
+                setup_build_env $target_host_t
 
-                    foreach ($th_tk in $target_host_tks) {
-                        "Building host deps for $target_host_t$(if ($th_tk) { " ($th_tk)" }) (cross target: $triplet)..."
-                        setup_build_env $target_host_t $th_tk
-                        foreach ($dep in $host_deps) {
-                            vcpkg --triplet $target_host_t --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
+                foreach ($dep in $host_ports) {
+                    vcpkg --triplet $target_host_t --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
+                }
+                foreach ($dep in $host_port_names) {
+                    vcpkg --triplet $target_host_t --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
+                }
+
+                ni -it dir $target_host_t -ea ignore | out-null
+                $th_subdir_abs = join-path $stage_dir $target_host_t
+                $th_installed  = @(vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' })
+
+                # Same silent gap as the target packing above: a host dep that
+                # failed to build just is not in the list.
+                foreach ($missing in @($host_port_names | ?{ $_ -notin $th_installed })) {
+                    $build_failures += "${missing}:$target_host_t"
+                    write-warning "${missing}:$target_host_t did not build, nothing to package"
+                }
+
+                $th_installed | ?{ $_ -in $host_port_names } | %{
+                    start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
+                        param($_)
+                        $pkg       = $_
+                        $qualified = "${pkg}:$($using:target_host_t)"
+                        import-module $using:binpkg_module
+                        set-location $using:th_subdir_abs
+                        "Packing $pkg for $($using:target_host_t)..."
+                        try {
+                            vcpkg-mkpkg $qualified
                         }
-                        foreach ($dep in $host_deps) {
-                            vcpkg --triplet $target_host_t --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
+                        catch {
+                            # Skip a host dep that failed to build, the same as
+                            # the target packing above.
+                            ri "${pkg}_*.zip" -fo -ea ignore
+                            ($using:pack_failures).Add($qualified)
+                            write-warning "skipping ${qualified}: packaging failed: $($_.exception.message)"
                         }
-
-                        # What to build is the direct set; what to package is
-                        # its closure.  A consumer restoring the host Qt needs
-                        # what that Qt was built against -- libb2, md4c,
-                        # double-conversion, egl, libpq, sqlite3 -- or
-                        # vcpkg-instpkg prunes it as incomplete, prunes the
-                        # target Qt that names it, and the build compiles Qt
-                        # from source for both.  Those are installed here and
-                        # never published, since only $host_deps was packaged.
-                        #
-                        # Computed after the install above, not beside
-                        # $host_deps: the walk reads each host package's own
-                        # dependencies out of the status file, so it stops at a
-                        # host Qt that is not installed yet.
-                        $host_pkg_deps = @(
-                            if ($is_android) { vcpkg-listhostdeps @qualified }
-                            else             { $host_deps }
-                        ) | ?{ $_ } | select-object -unique
-
-                        $th_subdir = if ($th_tk) { "$target_host_t/$th_tk" } else { $target_host_t }
-                        ni -it dir $th_subdir -ea ignore | out-null
-                        $th_subdir_abs = join-path $stage_dir $th_subdir
-                        $th_installed = @(vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' })
-
-                        # Same silent gap as the target packing above: a host
-                        # dep that failed to build just is not in the list.
-                        foreach ($missing in @($host_deps | ?{ $_ -notin $th_installed })) {
-                            $build_failures += "${missing}:$target_host_t$(if ($th_tk) { " ($th_tk)" })"
-                            write-warning "${missing}:$target_host_t did not build, nothing to package"
-                        }
-
-                        $th_installed | ?{ -not $is_android -or $_ -in $host_pkg_deps } | %{
-                            start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
-                                param($_)
-                                $pkg       = $_
-                                $qualified = "${pkg}:$($using:target_host_t)"
-                                import-module $using:binpkg_module
-                                set-location $using:th_subdir_abs
-                                "Packing $pkg for $($using:target_host_t)$(if ($using:th_tk) { " ($($using:th_tk))" })..."
-                                try {
-                                    vcpkg-mkpkg $qualified
-                                }
-                                catch {
-                                    # Skip a host dep that failed to build, the
-                                    # same as the target packing above.
-                                    ri "${pkg}_*.zip" -fo -ea ignore
-                                    ($using:pack_failures).Add($qualified)
-                                    write-warning "skipping ${qualified}: packaging failed: $($_.exception.message)"
-                                }
-                            }
-                        } | receive-job -wait -autoremovejob
                     }
+                } | receive-job -wait -autoremovejob
 
-                    if ((-not $added_target_hosts[$target_host_t]) -and ($target_host_t -notin @($build_triplets | %{ "$_" }))) {
-                        $added_target_hosts[$target_host_t] = $true
-                        $th_obj = [PSCustomObject]@{ Triplet = $target_host_t; Toolkits = $target_host_tks }
-                        $th_obj | add-member -membertype scriptmethod -name ToString -value { $this.Triplet } -force
-                        $extra_triplets += $th_obj
-                    }
+                # The default toolkit's directory is the only one packed into,
+                # so that is the only one to upload from.
+                if ((-not $added_target_hosts[$target_host_t]) -and ($target_host_t -notin @($build_triplets | %{ "$_" }))) {
+                    $added_target_hosts[$target_host_t] = $true
+                    $th_obj = [PSCustomObject]@{ Triplet = $target_host_t; Toolkits = @('') }
+                    $th_obj | add-member -membertype scriptmethod -name ToString -value { $this.Triplet } -force
+                    $extra_triplets += $th_obj
                 }
             }
         }

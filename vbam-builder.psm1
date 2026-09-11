@@ -103,6 +103,13 @@ $TRIPLETS       = if ($iswindows) {
 # they are opt-in via --android rather than part of $TRIPLETS.
 $ANDROID_TRIPLETS = 'arm64-android','arm-neon-android','x64-android','x86-android','riscv64-android'
 
+# The triplets that can host a build on this platform: the plain OS ones, with
+# neither -static nor mingw, which are the triplets vcpkg builds host tools
+# for. On Windows that is every architecture's own machine -- x64-windows,
+# x86-windows, arm64-windows -- and not only the one this builder happens to
+# run on, since an Android build can be hosted on any of them.
+$HOST_TRIPLETS = @($TRIPLETS | ?{ $_ -match '^[^-]+-(windows|linux|osx)$' })
+
 if ($iswindows) {
     $git_bin_dir   = '/progra~1/git/cmd'
     $cmake_bin_dir = '/progra~1/cmake/bin'
@@ -463,7 +470,7 @@ if ($iswindows) {
     }
 }
 
-# vcpkg-list, vcpkg-mkpkg and vcpkg-listhostdeps live in their own repo.
+# vcpkg-list and vcpkg-mkpkg live in their own repo.
 # setup_build_env pulls them in, once per session.
 function update_binpkg_module {
     if (-not (test-path $REPOS_ROOT/vcpkg-binpkg-prototype)) {
@@ -720,6 +727,129 @@ function get_dep_ports([string]$triplet = '') {
     if ($triplet -match '-android$') { $ANDROID_DEP_PORTS } else { $DEP_PORTS }
 }
 
+# The host packages a build of $triplets puts on $host_triplet, as vcpkg
+# install specs: the port name plus whatever features the plan asks for. Every
+# triplet is planned with its own port list and the results are unioned, so
+# asking about all five Android triplets at once gives the set any of them
+# needs.
+#
+# Two things want this. A host triplet builds the Android host halves: moc, rcc
+# and androiddeployqt run on the build machine, so vcpkg builds qtbase and
+# qttools for the host while building them for the target, and no desktop build
+# asks for either -- a host that only ever built the desktop list has no host Qt
+# to hand an Android build that lands on it, and compiles one from source first.
+# The Android targets themselves are built on Linux and macOS under --android;
+# these are the host halves of that build, wanted on every host the platform
+# defines whether or not that host ever builds the targets. A cross-compiled
+# target wants the same for the machine it is cross-compiled *for*: an
+# arm64-windows-static build hosted on an arm64 machine needs vcpkg-cmake,
+# pkgconf and the rest built for arm64-windows.
+#
+# The set comes out of vcpkg's own install plan rather than a list here, so the
+# ports tree's host edges, features and platform gates are read the way the
+# build itself reads them, the whole graph is covered rather than the named
+# ports alone -- icu arrives under qtbase and asks for icu on the host to
+# cross-build its data, and nobody names icu -- and a new host dependency
+# arrives on its own. --dry-run computes that plan without building anything
+# and without an NDK, which is what makes this usable on a host that has
+# neither.
+#
+# $plan_for is where the plan comes from, one triplet at a time. It is a
+# parameter so the parsing below can be checked against a captured plan
+# without a vcpkg to run; nothing but the tests passes it.
+function get_host_ports([string[]]$triplets, [string]$host_triplet, [scriptblock]$plan_for = $null) {
+    # The plan is captured with 2>&1 so a failure can be reported with what
+    # vcpkg said about it. Under Windows PowerShell -- which is what the
+    # scheduled task runs -- a native command's redirected stderr becomes an
+    # error record, and the caller's erroractionpreference of stop turns the
+    # first one of those into a terminating error, so a triplet vcpkg merely
+    # grumbled about would take the whole nightly down instead of the warning
+    # below. This is scoped to the function and restored on the way out.
+    $erroractionpreference = 'continue'
+
+    # riscv64-android has no triplet in vcpkg itself, only in the overlay, and
+    # on Windows VCPKG_OVERLAY_TRIPLETS points at the per-toolkit directory
+    # instead. Name the overlay's own triplets directory for the plan so all
+    # five Android triplets resolve on every platform: vcpkg reads this
+    # alongside the environment, and repeating a directory it already has
+    # changes nothing.
+    $overlay_triplets = join-path `
+        $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS }) `
+        'triplets/community'
+
+    $overlay_args = if (test-path $overlay_triplets) { @('--overlay-triplets', $overlay_triplets) } else { @() }
+
+    # Planned against an install root of its own, which stays empty because
+    # --dry-run never writes packages into one. vcpkg leaves an already
+    # installed package out of a plan entirely unless it was named on the
+    # command line -- it treats one as satisfied whatever version it is -- so
+    # read against the real tree this returns everything that is missing today
+    # and nothing that was built yesterday. The host Qt would then drop out of
+    # the port list the run after it was first built, stop being upgraded by
+    # name, and sit at that version for good. Against an empty root the answer
+    # is the whole set every time, which is the question being asked: what does
+    # a build of this put on that host.
+    $plan_root = join-path $env:TEMP 'vbam-host-plan-root'
+
+    if (-not $plan_for) {
+        $plan_for = {
+            param($t)
+
+            $ports = @(get_dep_ports $t)
+
+            vcpkg install --dry-run @overlay_args --x-install-root=$plan_root `
+                --triplet $t --host-triplet $host_triplet `
+                --allow-unsupported --recurse @ports 2>&1
+        }
+    }
+
+    $features = [ordered]@{}
+
+    foreach ($t in $triplets) {
+        $plan = & $plan_for $t
+
+        # One triplet vcpkg cannot plan is not worth failing a nightly over:
+        # riscv64-android is the one that can go missing, and the host set
+        # barely differs between Android architectures, so the others cover it.
+        # Name the triplet anyway, so one that quietly stops resolving is still
+        # visible in the log.
+        if ($lastexitcode -ne 0) {
+            write-warning ("could not compute the $t host deps for ${host_triplet}: " +
+                           ((@($plan | %{ "$_" }) -join "`n").trim()))
+            continue
+        }
+
+        foreach ($line in $plan) {
+            # "  * icu[core,tools]:x64-windows@78.3#2", with " -- <port dir>"
+            # after the version for an overlay port. Both the packages the plan
+            # would build and the ones it reports already installed are wanted:
+            # naming an installed one is what keeps it upgraded and packaged.
+            if ("$line" -notmatch ('^\s*\*?\s*([^\s:\[\]]+)(?:\[([^\]]*)\])?:' +
+                                   [regex]::escape($host_triplet) + '@')) { continue }
+
+            $port = $matches[1]
+            $fs   = @($matches[2] -split ',' | %{ $_.trim() } | ?{ $_ })
+
+            if (-not $features.contains($port)) { $features[$port] = [ordered]@{} }
+
+            # "core" in a plan means the port's default features were turned
+            # off, and "platform-default-features" is how it writes the ones it
+            # kept. Neither belongs in a spec installed on its own here: what
+            # is wanted is the port's own defaults plus the extras the Android
+            # plan named -- icu's tools, say -- so that a port some other list
+            # already asked for only ever gains a feature, where a spec
+            # carrying core would take that list's features back off it.
+            foreach ($f in @($fs | ?{ $_ -notin 'core','platform-default-features' })) {
+                $features[$port][$f] = $true
+            }
+        }
+    }
+
+    foreach ($port in $features.keys) {
+        if ($features[$port].count) { "$port[$(@($features[$port].keys) -join ',')]" } else { $port }
+    }
+}
+
 function get_host_triplet {
     $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
         'Arm64' { 'arm64' }
@@ -731,6 +861,6 @@ function get_host_triplet {
     elseif ($ismacos) { "$arch-osx" }
 }
 
-export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports `
+export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_ports `
 		    -alias vcpkg

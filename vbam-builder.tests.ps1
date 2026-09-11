@@ -1030,4 +1030,153 @@ describe 'get-triplets' {
     }
 }
 
+# ── $HOST_TRIPLETS ──────────────────────────────────────────────────
+#
+# The hosts an Android cross build can be hosted on, which is also what
+# get_host_ports below is asked about, one at a time.
+
+describe 'HOST_TRIPLETS' {
+
+    it 'is the plain OS triplets of this platform' {
+        # No -static and no mingw: those are targets, not machines vcpkg
+        # builds host tools for.
+        $expected = & $script:vbam { $TRIPLETS } | ?{ $_ -notmatch '(-static|mingw)' }
+        $HOST_TRIPLETS | should -be @($expected)
+    }
+
+    it 'names every Windows architecture, not just this builder' -skip:(-not $IsWindows) {
+        # The point of the list: an Android build hosted on an arm64 or x86
+        # Windows machine wants host Qt packages too, and neither is the
+        # architecture the nightly runs on.
+        $HOST_TRIPLETS | should -be @('x64-windows', 'x86-windows', 'arm64-windows')
+    }
+
+    it 'is drawn from the triplets this platform builds' {
+        $triplets = & $script:vbam { $TRIPLETS }
+        $HOST_TRIPLETS | %{ $_ | should -bein $triplets }
+    }
+}
+
+# ── get_host_ports plan parsing ─────────────────────────────────────
+#
+# The install plans are fed in rather than run: what is under test is the
+# reading of them, and a real plan needs a vcpkg, a ports tree and an
+# overlay.
+
+describe 'get_host_ports' {
+
+    # $LASTEXITCODE is how the real plan source reports failure, so a stand-in
+    # has to set it too -- otherwise whatever ran last in the session decides
+    # whether the plan counts as one.
+    function script:plan_source([hashtable]$plans, [hashtable]$codes = @{}) {
+        {
+            param($t)
+
+            $global:LASTEXITCODE = $(if ($codes.contains($t)) { $codes[$t] } else { 0 })
+
+            if ($plans.contains($t)) { $plans[$t] } else { $plans['*'] }
+        }.GetNewClosure()
+    }
+
+    it 'takes the host packages and leaves the target ones' {
+        $plan = @(
+            'Computing installation plan...'
+            'The following packages will be built and installed:'
+            '  * zlib:x64-windows@1.3.2#2'
+            '  * qtbase[core,gui]:arm64-android@6.11.2#2'
+            '    qttools:arm64-android@6.11.2#2'
+            'Additional packages (*) will be modified to complete this operation.'
+        )
+        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+            should -be @('zlib')
+    }
+
+    it 'does not take a triplet whose name merely starts with the host one' {
+        # x64-windows-static is a different triplet, and its packages are not
+        # the host's.
+        $plan = @('  * openssl:x64-windows-static@3.6.4', '  * zlib:x64-windows@1.3.2#2')
+        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+            should -be @('zlib')
+    }
+
+    it 'keeps the features the plan asks for' {
+        $plan = @('  * icu[core,tools]:x64-windows@78.3#2')
+        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+            should -be @('icu[tools]')
+    }
+
+    it 'drops core and platform-default-features' {
+        # Both mean "about the defaults", and a spec installed on its own here
+        # wants the port's defaults plus the extras, never fewer: another list
+        # may already have asked for this port with features of its own.
+        $plan = @('  * pcre2[core,jit,platform-default-features]:x64-windows@10.47#1')
+        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+            should -be @('pcre2[jit]')
+    }
+
+    it 'reads an overlay port, which the plan follows with its directory' {
+        $plan = @('  * qtbase[core,dbus]:x64-windows@6.11.2#2 -- C:\src\vcpkg-overlay\qtbase')
+        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+            should -be @('qtbase[dbus]')
+    }
+
+    it 'reads the already installed section too' {
+        # An installed host package is still wanted by name: that is what
+        # keeps it upgraded and packaged with the rest.
+        $plan = @('The following packages are already installed:', '    expat:x64-windows@2.8.3')
+        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+            should -be @('expat')
+    }
+
+    it 'plans every triplet it is given' {
+        # One plan per triplet, each with its own port list: that is what makes
+        # the Android host set the union over all five.
+        $asked = [collections.generic.list[string]]::new()
+        $src   = { param($t) $global:LASTEXITCODE = 0; $asked.add($t); @() }.GetNewClosure()
+        get_host_ports $ANDROID_TRIPLETS 'x64-windows' $src | out-null
+        $asked | should -be $ANDROID_TRIPLETS
+    }
+
+    it 'unions the features every triplet asked for' {
+        $plans = @{
+            'arm64-android' = @('  * qtbase[core,gui]:x64-windows@6.11.2')
+            '*'             = @('  * qtbase[core,widgets]:x64-windows@6.11.2')
+        }
+        get_host_ports $ANDROID_TRIPLETS 'x64-windows' (plan_source $plans) |
+            should -be @('qtbase[gui,widgets]')
+    }
+
+    it 'lists a package once however many triplets named it' {
+        $plan = @('  * zlib:x64-windows@1.3.2#2')
+        @(get_host_ports $ANDROID_TRIPLETS 'x64-windows' (plan_source @{ '*' = $plan })).count |
+            should -be 1
+    }
+
+    it 'skips a triplet vcpkg could not plan, and keeps the rest' {
+        # riscv64-android has no triplet outside the overlay, so one that
+        # cannot be planned is a warning, not the end of the nightly.
+        $plans = @{
+            'riscv64-android' = @('error: could not find triplet riscv64-android')
+            '*'               = @('  * zlib:x64-windows@1.3.2#2')
+        }
+        $src = plan_source $plans @{ 'riscv64-android' = 1 }
+        get_host_ports $ANDROID_TRIPLETS 'x64-windows' $src 3>$null | should -be @('zlib')
+    }
+
+    it 'says which triplet it could not plan' {
+        $plans = @{ 'riscv64-android' = @('error: no such triplet'); '*' = @() }
+        $src   = plan_source $plans @{ 'riscv64-android' = 1 }
+        $warnings = @(get_host_ports $ANDROID_TRIPLETS 'x64-windows' $src 3>&1 |
+            ?{ $_ -is [management.automation.warningrecord] })
+        "$warnings" | should -belike '*riscv64-android*x64-windows*no such triplet*'
+    }
+
+    it 'returns nothing when no plan mentions the host triplet' {
+        # Which is how a triplet that needs nothing on the host -- a native
+        # build -- comes out.
+        @(get_host_ports 'x64-windows' 'x64-windows' (plan_source @{ '*' = @('  * zlib:x64-windows-static@1.3.2') })) |
+            should -be @()
+    }
+}
+
 # vim:set sw=4 et:
