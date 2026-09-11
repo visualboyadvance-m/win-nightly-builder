@@ -9,11 +9,7 @@ $trigger = new-scheduledtasktrigger -at $runat -daily
 
 if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
 
-$action  = new-scheduledtaskaction `
-    -execute "$env:systemroot\System32\WindowsPowerShell\v1.0\powershell.exe" `
-    -argument ("-executionpolicy remotesigned " + `
-	"-command ""& '$(join-path $psscriptroot update-winget.ps1)'""" + `
-	" *>> $ROOT/logs/update-winget.log")
+$action  = task_action -script update-winget.ps1 -log update-winget.log
 
 $principal = new-scheduledtaskprincipal `
     -userid $env:USERNAME `

@@ -9,11 +9,7 @@ $trigger = new-scheduledtasktrigger -at $runat -daily
 
 if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
 
-$action  = new-scheduledtaskaction `
-    -execute "$env:systemroot\System32\WindowsPowerShell\v1.0\powershell.exe" `
-    -argument ("-noprofile -executionpolicy remotesigned " + `
-	"-command ""& '$(join-path $psscriptroot msys2-update.ps1)'""" + `
-	" *>> $ROOT/logs/msys2-update.log")
+$action  = task_action -noprofile -script msys2-update.ps1 -log msys2-update.log
 
 $principal = new-scheduledtaskprincipal `
     -userid $env:USERNAME `

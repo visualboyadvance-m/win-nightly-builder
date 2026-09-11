@@ -8,11 +8,7 @@ $trigger = new-scheduledtasktrigger -once:$false -at 00:00 -repetitioninterval (
 
 if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
 
-$action  = new-scheduledtaskaction `
-    -execute "$env:systemroot\System32\WindowsPowerShell\v1.0\powershell.exe" `
-    -argument ("-executionpolicy remotesigned " + `
-	"-command ""& '$(join-path $psscriptroot update-repos.ps1)'""" + `
-	" *>> $ROOT/logs/update-repos.log")
+$action  = task_action -script update-repos.ps1 -log update-repos.log
 
 $principal = new-scheduledtaskprincipal `
     -userid $env:USERNAME `

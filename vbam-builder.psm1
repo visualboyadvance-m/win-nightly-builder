@@ -868,6 +868,47 @@ function get_host_triplet {
     elseif ($ismacos) { "$arch-osx" }
 }
 
+# Every register-*.ps1 wants the same action: Windows PowerShell running one of
+# the scripts next to this module, with everything it prints appended to a log
+# under $ROOT/logs. $script is a bare file name, resolved against this module's
+# own directory, which is where those scripts live.
+#
+# Two things this gets right that the nine hand-written copies of it did not:
+#
+# A terminating error unwinds past the redirection and is reported on the
+# process's own stderr, which the task scheduler throws away. A month of vcpkg
+# runs dying on their first download left nothing in the log but the line they
+# printed before it, and a bare 1 as the task's last result. Catch it inside the
+# redirected scriptblock so the error text goes to the log with everything else,
+# and exit non-zero by hand, since the catch has swallowed the failure.
+#
+# Windows PowerShell's redirection operators write through out-file, whose
+# default encoding is UTF-16. Moving the tasks off pwsh therefore turned the
+# logs into half a file of UTF-8 followed by half a file of UTF-16, which
+# nothing reads as one thing. out-file's default parameter values reach the
+# operator too, so set the encoding there. .NET writes the BOM only at position
+# zero, so appending to an existing log does not sprinkle more through it.
+function task_action {
+    param(
+	[parameter(mandatory)][string]$script,
+	[parameter(mandatory)][string]$log,
+	# Appended to the script invocation verbatim, e.g. '--triplets x64-windows-static'.
+	[string]$arguments = '',
+	[switch]$noprofile
+    )
+
+    $script_path = join-path $PSScriptRoot $script
+
+    new-scheduledtaskaction `
+	-execute "$env:systemroot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+	-argument (
+	    "$(if ($noprofile) { '-noprofile ' })-executionpolicy remotesigned -command " +
+	    """`$PSDefaultParameterValues['out-file:encoding'] = 'utf8'; " +
+	    "& { try { & '$script_path'$(if ($arguments) { " $arguments" }) } " +
+	    "catch { write-output (`$_ | out-string); write-output `$_.scriptstacktrace; exit 1 } }""" +
+	    " *>> $ROOT/logs/$log")
+}
+
 export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_ports `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_ports,task_action `
 		    -alias vcpkg

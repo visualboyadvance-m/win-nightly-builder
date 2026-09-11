@@ -3,6 +3,19 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 $erroractionpreference = 'stop'
 $progresspreference    = 'silentlycontinue'
 
+# start-threadjob is built into PowerShell 7 but is a gallery module for Windows
+# PowerShell, which is what the scheduled tasks run. Say so here rather than
+# after a night of building, which is where the first packing job would find out.
+if (-not (get-command start-threadjob -ea ignore)) {
+    # The gallery ships it under both names depending on the version.
+    import-module microsoft.powershell.threadjob -ea ignore
+    import-module threadjob -ea ignore
+
+    if (-not (get-command start-threadjob -ea ignore)) {
+        write-error "start-threadjob is not available: install-module threadjob -scope allusers"
+    }
+}
+
 $stage_dir = "$env:TEMP/vbam-daily-packages"
 
 $packages      = $null
@@ -86,17 +99,19 @@ function set_content_lf([string]$path, [string[]]$lines) {
 }
 
 if ('wxwidgets' -in $selected_port_names) {
-    $temp_dir = "$env:TEMP/wx-port-temp"
+    $temp_dir    = "$env:TEMP/wx-port-temp"
+    $wx_tarball  = "$temp_dir/master.tar.gz"
 
     ni -it dir $temp_dir -ea ignore | out-null
 
-    pushd $temp_dir
+    # Not curl: Windows PowerShell aliases that to invoke-webrequest, which has
+    # no -LO, so this line died on a parameter it never saw the moment the
+    # scheduled tasks moved off pwsh. invoke-webrequest is the one spelling both
+    # shells agree on. Write to an absolute path rather than pushd'ing, since
+    # -outfile resolves against the process directory, not the PowerShell one.
+    iwr -usebasicparsing https://github.com/wxWidgets/wxWidgets/archive/master.tar.gz -outfile $wx_tarball
 
-    curl -LO https://github.com/wxWidgets/wxWidgets/archive/master.tar.gz
-
-    $new_wx_hash = (get-filehash -a sha512 master.tar.gz).hash.tolower()
-
-    popd
+    $new_wx_hash = (get-filehash -a sha512 $wx_tarball).hash.tolower()
 
     ri -r -fo $temp_dir
 
