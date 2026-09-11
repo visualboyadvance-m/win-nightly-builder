@@ -35,7 +35,7 @@ function git_out {
     @(& git @args 2>&1 | %{ "$_" })
 }
 
-echo vcpkg vcpkg-binpkg-prototype vcpkg-overlay win-nightly-builder windows-dev-guide | %{
+echo visualboyadvance-m vcpkg vcpkg-binpkg-prototype vcpkg-overlay win-nightly-builder windows-dev-guide | %{
     pushd "$root/source/repos/$_"
 
     # Last line, so a stray warning from git cannot be mistaken for the branch.
