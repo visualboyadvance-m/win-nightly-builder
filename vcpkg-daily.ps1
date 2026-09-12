@@ -85,6 +85,39 @@ function android_host_ports([string]$triplet) {
     @($ports)
 }
 
+# Of the Android host halves just added to a triplet, the ones to keep out of
+# the by-name upgrades.
+#
+# vcpkg upgrade rebuilds the port it is given and every installed package that
+# depends on it, across triplets, and that cuts two ways here.
+#
+# The build tooling -- vcpkg-cmake and the other script ports, pkgconf,
+# ffmpeg-bin2c -- is declared as a host dependency by every port there is, so
+# upgrading one of those by name for a host triplet rebuilds that entire tree,
+# ports no list names any more included. A leftover sdl2 on the macOS builder,
+# from a faudio that has since moved to SDL3, was rebuilt and republished every
+# night that way.
+#
+# The rest of them -- the host Qt and what it is built against -- have the
+# installed Android targets downstream: qtbase:arm64-android needs
+# qtbase:x64-linux so that moc and androiddeployqt can run, so upgrading the
+# host copy rebuilds every Android package that was cross-built against it, in
+# a run that never asked for Android. Where those packages are installed, leave
+# that to the --android run: it rebuilds them anyway, and it upgrades these same
+# halves itself through the cross pass below. Where none is installed -- every
+# Windows builder, the Android triplets being built only on Linux and macOS --
+# there is nothing downstream to drag in and only the tooling is held back.
+#
+# Held back from the upgrades only. They are installed and packaged either way,
+# which is what a host that has never built them needs.
+function held_back_host_ports([string]$triplet, [string[]]$added) {
+    if (-not $added) { return @() }
+
+    if (@(vcpkg-list | ?{ $_ -match ':[^\s]+-android(\s|$)' })) { return $added }
+
+    @(@(get_host_ports $ANDROID_TRIPLETS $triplet -Tools) -replace '\[[^\]]+\]','' | ?{ $_ -in $added })
+}
+
 $selected_port_names = @($build_triplets | %{ selected_ports $_ }) -replace '\[[^\]]+\]','' | select-object -unique
 
 "INFO: vcpkg packages upgrade started on $(date)."
@@ -210,25 +243,11 @@ foreach ($triplet in $build_triplets) {
         $build_ports      = $build_ports + $android_host
         $build_port_names = @($build_ports -replace '\[[^\]]+\]','')
 
-        # The build tooling among what that added -- vcpkg-cmake and the other
-        # script ports, pkgconf, ffmpeg-bin2c -- is built and packaged like the
-        # rest of it but never upgraded by name. vcpkg upgrade rebuilds the port
-        # it is given and every installed package that depends on it, and every
-        # port declares the script ports as host dependencies, so upgrading one
-        # for a host triplet rebuilds that entire tree -- ports no list names any
-        # more included. A leftover sdl2 on the macOS builder, from a faudio that
-        # has since moved to SDL3, was rebuilt and republished every night that
-        # way. They come back fresh on their own the moment a port that needs a
-        # newer one is rebuilt.
-        #
-        # Only what the Android host halves added: a port the triplet's own list
+        # Some of what that added is built and packaged but not upgraded by
+        # name; see above. Only what it added -- a port the triplet's own list
         # names is upgraded by name as it always was.
-        $android_host_names = @($android_host -replace '\[[^\]]+\]','')
-        $host_tools         = @(if ($android_host) {
-            @(get_host_ports $ANDROID_TRIPLETS $triplet -Tools) -replace '\[[^\]]+\]','' |
-                ?{ $_ -in $android_host_names }
-        })
-        $upgrade_port_names = @($build_port_names | ?{ $_ -notin $host_tools })
+        $held_back          = @(held_back_host_ports $triplet @($android_host -replace '\[[^\]]+\]',''))
+        $upgrade_port_names = @($build_port_names | ?{ $_ -notin $held_back })
 
         # vcpkg install treats a dependency as satisfied when a package of that
         # name is installed for that triplet: it never compares what is
