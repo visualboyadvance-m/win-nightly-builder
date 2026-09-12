@@ -201,6 +201,24 @@ if ('wxwidgets' -in $selected_port_names) {
     popd
 }
 
+# Every upgrade in this script goes through here so that none of them can go
+# out bare. A `vcpkg upgrade` with no port named ignores --triplet and plans a
+# rebuild of every triplet in the installed tree, all of which then build under
+# whichever single environment happens to be set at the time: that is how
+# zlib:x86-mingw-static came to be compiled with MSVC and die on kernel32.lib.
+# upgrade removes a package before it rebuilds it, so the failure left the port
+# uninstalled rather than merely stale. PowerShell drops an empty string
+# argument to a native command instead of passing it, so one blank entry in a
+# port list is all it would take to get there.
+function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
+    if (-not $port) {
+        write-error "refusing to run 'vcpkg upgrade' with no port named (triplet $triplet)"
+    }
+
+    vcpkg --triplet $triplet --host-triplet $host_triplet upgrade `
+        --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
+}
+
 # Build and generate binary packages
 
 ri -r -fo  $stage_dir -ea ignore
@@ -267,16 +285,27 @@ foreach ($triplet in $build_triplets) {
             $host_installed = @(vcpkg-list | ?{ $_ -match (":$host_t" + '\s+\d') } | %{ $_ -replace ':.*','' })
 
             foreach ($port in @($build_port_names | ?{ $_ -in $host_installed })) {
-                vcpkg --triplet $host_t --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
+                upgrade_port $host_t $host_t $port
             }
         }
 
+        # Upgrade each port as soon as it has been installed, rather than
+        # sweeping the whole list once the list is through. install only asks
+        # whether a package of that name is present for the triplet and never
+        # which version it is, so a port whose ABI has moved comes back
+        # "already installed" and every port installed after it links that
+        # stale copy; the sweep at the end then rebuilt it and dragged all of
+        # them along behind it as dependents. Upgrading in place means the next
+        # port in the list installs against the copy it is going to keep, and
+        # $DEP_PORTS is ordered so a port's dependencies come before it.
         foreach ($port in $build_ports) {
             vcpkg --triplet $triplet --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $port
-        }
 
-        foreach ($port in $upgrade_port_names) {
-            vcpkg --triplet $triplet --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
+            $port_name = $port -replace '\[[^\]]+\]',''
+
+            if ($port_name -in $upgrade_port_names) {
+                upgrade_port $triplet $host_t $port_name
+            }
         }
 
         $pkg_subdir = if ($tk) { "$triplet/$tk" } else { $triplet }
@@ -393,11 +422,15 @@ foreach ($triplet in $build_triplets) {
 
                 setup_build_env $target_host_t
 
+                # Interleaved for the reason the target ports above are.
                 foreach ($dep in $host_ports) {
                     vcpkg --triplet $target_host_t --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
-                }
-                foreach ($dep in @($host_port_names | ?{ $_ -notin $th_tools })) {
-                    vcpkg --triplet $target_host_t --host-triplet $host_t upgrade --no-binarycaching --allow-unsupported --no-dry-run --keep-going $dep
+
+                    $dep_name = $dep -replace '\[[^\]]+\]',''
+
+                    if ($dep_name -notin $th_tools) {
+                        upgrade_port $target_host_t $host_t $dep_name
+                    }
                 }
 
                 ni -it dir $target_host_t -ea ignore | out-null

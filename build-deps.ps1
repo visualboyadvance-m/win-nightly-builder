@@ -47,14 +47,35 @@ foreach ($triplet in $build_triplets) {
     }
 }
 
-teardown_build_env
+# The sweep that catches what went out of date behind the named ports above:
+# the transitive dependencies nothing in $DEP_PORTS asks for by name.
+#
+# A bare `vcpkg upgrade` did this in one command, but an upgrade with no port
+# named ignores --triplet and plans a rebuild of every triplet in the installed
+# tree at once, so all of them built under whichever single environment
+# happened to be set. The mingw ports came out compiled with MSVC and died on
+# kernel32.lib -- and since upgrade removes a package before it rebuilds it,
+# they were left uninstalled rather than merely stale. Repeating the whole bare
+# upgrade afterwards with the mingw environment set, which is what used to
+# follow it, only rebuilt what the first pass had already broken.
+#
+# Ask per triplet instead, with that triplet's environment set and every
+# package installed for it named. Naming them is what keeps the plan inside the
+# triplet: vcpkg widens to the whole tree only when it is given nothing, so
+# never hand it an empty list.
+foreach ($triplet in $build_triplets) {
+    foreach ($tk in $triplet.toolkits) {
+        setup_build_env $triplet $tk
 
-# Do full upgrade of all deps, repeat for the MinGW triplets because the toolchain has to be in $env:PATH.
-vcpkg upgrade --no-binarycaching --no-dry-run
+        # Feature rows -- "bzip2[tool]:x86-mingw-static" -- carry no version, so
+        # the digit in the pattern leaves them out and this stays port names.
+        $installed = @(vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } |
+                       %{ $_ -replace ':.*','' } | ?{ $_ } | select-object -unique)
 
-foreach ($triplet in (write x86-mingw-static x64-mingw-static)) {
-    setup_build_env $triplet
-    vcpkg upgrade --no-binarycaching --no-dry-run
+        if ($installed) {
+            vcpkg --triplet $triplet upgrade --no-binarycaching --no-dry-run --allow-unsupported @installed
+        }
+    }
 }
 
 teardown_build_env
