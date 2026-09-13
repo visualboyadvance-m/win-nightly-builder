@@ -226,14 +226,42 @@ ni -it dir $stage_dir -ea ignore | out-null
 
 pushd $stage_dir
 
-$extra_triplets     = @()
-$added_target_hosts = @{}
+# What to pack, once every build is done: one entry per triplet and toolkit,
+# holding the packages that belong in that directory. The target pass and any
+# host-dep pass that lands on the same pair merge into one entry, so a
+# directory is packed once with everything in it rather than once per pass.
+#
+# It is the upload list too. $extra_triplets and $added_target_hosts used to
+# work that out separately -- a host triplet no target of the run covered had
+# to be added to the upload set by hand and remembered per toolkit -- and a
+# pack unit says both at once: a pair with packages in it is a pair with a
+# directory to put.
+$pack_units         = [ordered]@{}
 $throttle           = [System.Environment]::ProcessorCount
 $binpkg_module      = $null
 # Ports whose packaging was skipped, filled in by the packing jobs below.
 $pack_failures      = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
 # Ports that never came out of the build at all.
 $build_failures     = @()
+
+# Record packages against the triplet and toolkit they were built for, for the
+# one packing pass further down to work through.
+function add_pack_unit([string]$triplet, [string]$toolkit, [string[]]$packages) {
+    if (-not $packages) { return }
+
+    $key = "$triplet|$toolkit"
+
+    if (-not $pack_units.contains($key)) {
+        $pack_units[$key] = [PSCustomObject]@{
+            Triplet  = $triplet
+            Toolkit  = $toolkit
+            Packages = @()
+        }
+    }
+
+    $unit          = $pack_units[$key]
+    $unit.Packages = @(@($unit.Packages) + @($packages) | select-object -unique)
+}
 
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
@@ -308,10 +336,6 @@ foreach ($triplet in $build_triplets) {
             }
         }
 
-        $pkg_subdir = if ($tk) { "$triplet/$tk" } else { $triplet }
-        ni -it dir $pkg_subdir -ea ignore | out-null
-        $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
-        $triplet_s      = "$triplet"
         $installed_names = @(vcpkg-list | ?{ $_ -match (":$triplet" + '\s+\d') } | %{ $_ -replace ':.*','' })
 
         # A port that failed to build was never installed, so vcpkg-list does
@@ -326,43 +350,22 @@ foreach ($triplet in $build_triplets) {
             write-warning "${missing}:$triplet did not build, nothing to package"
         }
 
-        $installed_names | ?{ -not $packages -or $_ -in $build_port_names } | %{
-            start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
-                param($_)
-                # Held under another name: $_ is the error record inside the
-                # catch below.
-                $pkg       = $_
-                $qualified = "${pkg}:$($using:triplet_s)"
-                import-module $using:binpkg_module
-                set-location $using:pkg_subdir_abs
-                "Packing $pkg for $($using:triplet_s)$(if ($using:tk) { " ($($using:tk))" })..."
-                try {
-                    vcpkg-mkpkg $qualified
-                }
-                catch {
-                    # A port that failed to build is not installed, so there is
-                    # nothing to package for it and vcpkg-mkpkg says so as a
-                    # terminating error -- which receive-job re-raises in the
-                    # parent, where erroractionpreference is stop, and one
-                    # broken port took the whole nightly with it. Skip that
-                    # port instead: the other packages for this triplet still
-                    # get published, and the previous version of this one stays
-                    # up since nothing replaces it.
-                    ri "${pkg}_*.zip" -fo -ea ignore
-                    ($using:pack_failures).Add($qualified)
-                    write-warning "skipping ${qualified}: packaging failed: $($_.exception.message)"
-                }
-            }
-        } | receive-job -wait -autoremovejob
+        add_pack_unit "$triplet" $tk @($installed_names | ?{ -not $packages -or $_ -in $build_port_names })
 
         # For cross-compiling triplets, build the host-tool dependencies for
         # the target architecture's native host triplet (e.g. arm64-windows for
         # an arm64-windows-static target) so they are usable on the target
         # machine.
         #
-        # The default toolkit only, for the reason the Android host halves above
-        # are: what these provide is build tools that nothing links against, so
-        # which toolset built them changes nothing about what they do.
+        # Once per toolkit, not once for the default one. Which toolset built a
+        # script port changes nothing about what it does, which is the reason
+        # this used to run under the default toolkit alone -- but that is a fact
+        # about the tools, not about the consumer. A VS2022 user restores from
+        # vcpkg/<triplet>/v143 and finds no host deps sitting there at all, so
+        # vcpkg-instpkg prunes the target packages that name them, and the build
+        # compiles the lot from source having downloaded the packages that were
+        # supposed to spare it that. They have to be published under every
+        # toolkit that has packages of its own to go with them.
         $is_android = "$triplet" -in $ANDROID_TRIPLETS
 
         if ($is_android) {
@@ -377,6 +380,18 @@ foreach ($triplet in $build_triplets) {
             # A host triplet in this run has already built these from its own
             # list. Doing it again here is what covers the run that builds the
             # Android targets and no host triplet at all.
+            $target_host_t = "$host_t"
+        }
+        elseif ((($triplet.ToString() -split '-')[0]) -eq 'x86') {
+            # x86 is a target, not a machine. Deriving x86-windows the way the
+            # branch below does builds and publishes a tool closure for a
+            # 32-bit Windows build host, and there is no such builder: an x86
+            # build is done on an x64 one, against x64-windows host tools,
+            # which is what --host-triplet has been telling vcpkg all along.
+            # So the host half of an x86 target belongs under x64-windows,
+            # where the consumer of an x86 package will look for it -- and
+            # under each toolkit, since a VS2022 user restoring
+            # x86-windows-static/v143 needs x64-windows/v143 to go with it.
             $target_host_t = "$host_t"
         }
         else {
@@ -395,7 +410,7 @@ foreach ($triplet in $build_triplets) {
         # plan, target and host triplet being one string by then, and hand back
         # the whole target graph as host deps with every [core] pin stripped
         # back to the port's defaults.
-        if (-not $packages -and -not $tk -and $host_t -and ("$target_host_t" -ne "$triplet") -and
+        if (-not $packages -and $host_t -and ("$target_host_t" -ne "$triplet") -and
             ($is_android -or (($triplet -split '-')[0] -ne ($host_t -split '-')[0]))) {
             # The question the host triplets' own lists answer above, asked of
             # this target: what would building it put on that host? vcpkg's plan
@@ -418,9 +433,9 @@ foreach ($triplet in $build_triplets) {
             $th_tools        = @(get_host_ports $triplet $target_host_t -Tools) -replace '\[[^\]]+\]',''
 
             if ($host_ports) {
-                "Building host deps for $target_host_t (cross target: $triplet): $($host_ports -join ', ')"
+                "Building host deps for $target_host_t$(if ($tk) { " ($tk)" }) (cross target: $triplet): $($host_ports -join ', ')"
 
-                setup_build_env $target_host_t
+                setup_build_env $target_host_t $tk
 
                 # Interleaved for the reason the target ports above are.
                 foreach ($dep in $host_ports) {
@@ -433,166 +448,191 @@ foreach ($triplet in $build_triplets) {
                     }
                 }
 
-                ni -it dir $target_host_t -ea ignore | out-null
-                $th_subdir_abs = join-path $stage_dir $target_host_t
-                $th_installed  = @(vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' })
+                $th_installed = @(vcpkg-list | ?{ $_ -match (":$target_host_t" + '\s+\d') } | %{ $_ -replace ':.*','' })
 
                 # Same silent gap as the target packing above: a host dep that
                 # failed to build just is not in the list.
                 foreach ($missing in @($host_port_names | ?{ $_ -notin $th_installed })) {
-                    $build_failures += "${missing}:$target_host_t"
+                    $build_failures += "${missing}:$target_host_t$(if ($tk) { " ($tk)" })"
                     write-warning "${missing}:$target_host_t did not build, nothing to package"
                 }
 
-                $th_installed | ?{ $_ -in $host_port_names } | %{
-                    start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
-                        param($_)
-                        $pkg       = $_
-                        $qualified = "${pkg}:$($using:target_host_t)"
-                        import-module $using:binpkg_module
-                        set-location $using:th_subdir_abs
-                        "Packing $pkg for $($using:target_host_t)..."
-                        try {
-                            vcpkg-mkpkg $qualified
-                        }
-                        catch {
-                            # Skip a host dep that failed to build, the same as
-                            # the target packing above.
-                            ri "${pkg}_*.zip" -fo -ea ignore
-                            ($using:pack_failures).Add($qualified)
-                            write-warning "skipping ${qualified}: packaging failed: $($_.exception.message)"
-                        }
-                    }
-                } | receive-job -wait -autoremovejob
-
-                # The default toolkit's directory is the only one packed into,
-                # so that is the only one to upload from.
-                if ((-not $added_target_hosts[$target_host_t]) -and ($target_host_t -notin @($build_triplets | %{ "$_" }))) {
-                    $added_target_hosts[$target_host_t] = $true
-                    $th_obj = [PSCustomObject]@{ Triplet = $target_host_t; Toolkits = @('') }
-                    $th_obj | add-member -membertype scriptmethod -name ToString -value { $this.Triplet } -force
-                    $extra_triplets += $th_obj
-                }
+                add_pack_unit $target_host_t $tk @($th_installed | ?{ $_ -in $host_port_names })
             }
         }
     }
 }
 
-teardown_build_env
+# One packing pass, now that every build is done.
+#
+# It used to run inside each triplet's own iteration, which packed a host
+# triplet before the targets later in the run had finished adding host deps to
+# it -- and packed it again for each of them, three passes over one directory
+# on this builder. Waiting until the builds are through makes it one pass per
+# directory, with everything that belongs in it.
+#
+# Sequential over pairs and parallel within one, not both: vcpkg-mkpkg reads
+# the tree VCPKG_ROOT names, that is a single process-wide variable, and thread
+# jobs share the process, so two pairs cannot be in flight together. Ordered by
+# toolkit so setup_build_env is moved between the two trees no more than it has
+# to be.
+foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
+    $unit_triplet = $unit.Triplet
+    $unit_tk      = $unit.Toolkit
 
-$build_triplets = @($build_triplets) + @($extra_triplets)
+    setup_build_env $unit_triplet $unit_tk
+
+    $pkg_subdir = if ($unit_tk) { "$unit_triplet/$unit_tk" } else { $unit_triplet }
+
+    ni -it dir $pkg_subdir -ea ignore | out-null
+
+    $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
+
+    $unit.Packages | %{
+        start-threadjob -throttlelimit $throttle -argumentlist $_ -scriptblock {
+            param($_)
+            # Held under another name: $_ is the error record inside the catch
+            # below.
+            $pkg       = $_
+            $qualified = "${pkg}:$($using:unit_triplet)"
+            import-module $using:binpkg_module
+            set-location $using:pkg_subdir_abs
+            "Packing $pkg for $($using:unit_triplet)$(if ($using:unit_tk) { " ($($using:unit_tk))" })..."
+            try {
+                vcpkg-mkpkg $qualified
+            }
+            catch {
+                # A port that failed to build is not installed, so there is
+                # nothing to package for it and vcpkg-mkpkg says so as a
+                # terminating error -- which receive-job re-raises in the
+                # parent, where erroractionpreference is stop, and one broken
+                # port took the whole nightly with it. Skip that port instead:
+                # the other packages for this triplet still get published, and
+                # the previous version of this one stays up since nothing
+                # replaces it.
+                ri "${pkg}_*.zip" -fo -ea ignore
+                ($using:pack_failures).Add($qualified)
+                write-warning "skipping ${qualified}: packaging failed: $($_.exception.message)"
+            }
+        }
+    } | receive-job -wait -autoremovejob
+}
+
+teardown_build_env
 
 # Packages sftp could not put, filled in by the upload jobs below.
 $upload_failures = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
 
-foreach ($triplet in $build_triplets) {
-    foreach ($tk in $triplet.toolkits) {
-        $pkg_subdir  = if ($tk) { "$triplet/$tk" } else { $triplet }
-        $remote_dir  = "vcpkg/$(if ($tk) { "$triplet/$tk" } else { $triplet })"
-        $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
-        # What is up there already, so the put below can clear the older
-        # versions of it first.
-        #
-        # sftp writes "Connected to ..." to stderr and "Changing to: ..." plus
-        # the echoed prompt to stdout, so with stderr discarded two header lines
-        # arrive rather than three -- and skipping three took the first file
-        # with them. That is the alphabetically first port in the directory,
-        # which therefore never looked present and never had its older versions
-        # removed: x64-linux collected two alsa packages that way, and a
-        # consumer offered a choice of two took neither.
-        #
-        # Match the names instead of counting what comes before them, and ask
-        # for one per line so a short name cannot share one.
-        #
-        # In its own scope for the erroractionpreference: the banner is on
-        # stderr, Windows PowerShell turns a native command's redirected stderr
-        # into a NativeCommandError, and stop makes the first one terminating,
-        # so saying hello would abort the upload pass. The 2>$null does not
-        # avoid that on its own -- the record is raised before it is discarded
-        # -- it only keeps the banner out of the names below.
-        $existing_pkgs = & {
+# The pairs that were packed are the pairs to upload: a directory with packages
+# in it is a directory to put.
+foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
+    $triplet        = $unit.Triplet
+    $tk             = $unit.Toolkit
+    $pkg_subdir     = if ($tk) { "$triplet/$tk" } else { $triplet }
+    $remote_dir     = "vcpkg/$pkg_subdir"
+    $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
+    # What is up there already, so the put below can clear the older
+    # versions of it first.
+    #
+    # sftp writes "Connected to ..." to stderr and "Changing to: ..." plus
+    # the echoed prompt to stdout, so with stderr discarded two header lines
+    # arrive rather than three -- and skipping three took the first file
+    # with them. That is the alphabetically first port in the directory,
+    # which therefore never looked present and never had its older versions
+    # removed: x64-linux collected two alsa packages that way, and a
+    # consumer offered a choice of two took neither.
+    #
+    # Match the names instead of counting what comes before them, and ask
+    # for one per line so a short name cannot share one.
+    #
+    # In its own scope for the erroractionpreference: the banner is on
+    # stderr, Windows PowerShell turns a native command's redirected stderr
+    # into a NativeCommandError, and stop makes the first one terminating,
+    # so saying hello would abort the upload pass. The 2>$null does not
+    # avoid that on its own -- the record is raised before it is discarded
+    # -- it only keeps the banner out of the names below.
+    $existing_pkgs = & {
+        $erroractionpreference = 'continue'
+
+        @('ls -1' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | %{
+            if ($_ -match '^\s*([^_\s]+)_[^_\s]+_[^_\s]+\.zip\s*$') { $matches[1] }
+        }) | select-object -unique
+    }
+    # One sftp session per chunk of packages rather than one per package.
+    # Every connection is another chance at the teardown bug handled
+    # below, and a triplet has dozens of packages, so a run was doing
+    # dozens of connects and disconnects where three will do.
+    $upload_throttle = 3
+    $zips = @(gci $pkg_subdir_abs -filter '*.zip')
+    $chunks = @()
+    if ($zips.count) {
+        $chunk_size = [math]::max(1, [math]::ceiling($zips.count / $upload_throttle))
+        for ($z = 0; $z -lt $zips.count; $z += $chunk_size) {
+            $chunks += ,@($zips[$z..([math]::min($z + $chunk_size - 1, $zips.count - 1))])
+        }
+    }
+
+    $chunks | %{
+        start-threadjob -throttlelimit $upload_throttle -argumentlist (,$_) -scriptblock {
+            param($chunk)
+            $rdir = $using:remote_dir
+
+            # sftp reads this batch a line at a time, so write LF
+            # whatever the builder: add-content ends lines the platform's
+            # way, and a CR riding along on a put becomes part of the
+            # remote file name. set_content_lf lives in the script scope,
+            # which a thread job's runspace does not see, so write inline.
+            $batch = new-temporaryfile
+            $batch_lines = @()
+            foreach ($zip in $chunk) {
+                $zip_name = $zip.Name
+                $pkg      = $zip_name -replace '^([^_]+).*', '$1'
+                if ($pkg -in $using:existing_pkgs) {
+                    # Leading "-" so sftp keeps going: one glob that
+                    # matches nothing would otherwise abandon the rest of
+                    # the chunk, which now holds other packages too.
+                    $batch_lines += "-rm $rdir/${pkg}_*"
+                }
+                $batch_lines += "put $($zip.FullName) $rdir/$zip_name"
+                $batch_lines += "chmod 664 $rdir/$zip_name"
+            }
+
+            [io.file]::WriteAllText($batch.FullName, (($batch_lines -join "`n") + "`n"))
+
+            # sftp writes to stderr in the ordinary course of working: the
+            # "Connected to ..." banner up front, and on disconnect it can
+            # report "close - IO is still pending on closed socket", a
+            # client-side Win32 OpenSSH bug (Win32-OpenSSH#1899) emitted
+            # after the transfers with an exit status of 0. Windows
+            # PowerShell turns a native command's redirected stderr into an
+            # error record, which receive-job re-raises in the parent where
+            # erroractionpreference stop then killed the whole run -- having
+            # already uploaded the files.
+            #
+            # Capturing it is not what avoids that: 2>&1 and 2>$null both
+            # raise the record before disposing of it, and what saves this
+            # call is that a thread job's runspace starts at continue rather
+            # than inheriting stop. Set it here so that is a decision and
+            # not a default, and judge the upload by the exit status, which
+            # is what actually says whether the puts worked.
             $erroractionpreference = 'continue'
 
-            @('ls -1' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | %{
-                if ($_ -match '^\s*([^_\s]+)_[^_\s]+_[^_\s]+\.zip\s*$') { $matches[1] }
-            }) | select-object -unique
-        }
-        # One sftp session per chunk of packages rather than one per package.
-        # Every connection is another chance at the teardown bug handled
-        # below, and a triplet has dozens of packages, so a run was doing
-        # dozens of connects and disconnects where three will do.
-        $upload_throttle = 3
-        $zips = @(gci $pkg_subdir_abs -filter '*.zip')
-        $chunks = @()
-        if ($zips.count) {
-            $chunk_size = [math]::max(1, [math]::ceiling($zips.count / $upload_throttle))
-            for ($z = 0; $z -lt $zips.count; $z += $chunk_size) {
-                $chunks += ,@($zips[$z..([math]::min($z + $chunk_size - 1, $zips.count - 1))])
-            }
-        }
+            $sftp_out  = sftp -b $batch sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/ 2>&1 | out-string
+            $sftp_code = $LASTEXITCODE
 
-        $chunks | %{
-            start-threadjob -throttlelimit $upload_throttle -argumentlist (,$_) -scriptblock {
-                param($chunk)
-                $rdir = $using:remote_dir
+            remove-item $batch
 
-                # sftp reads this batch a line at a time, so write LF
-                # whatever the builder: add-content ends lines the platform's
-                # way, and a CR riding along on a put becomes part of the
-                # remote file name. set_content_lf lives in the script scope,
-                # which a thread job's runspace does not see, so write inline.
-                $batch = new-temporaryfile
-                $batch_lines = @()
+            if ($sftp_code -ne 0) {
                 foreach ($zip in $chunk) {
-                    $zip_name = $zip.Name
-                    $pkg      = $zip_name -replace '^([^_]+).*', '$1'
-                    if ($pkg -in $using:existing_pkgs) {
-                        # Leading "-" so sftp keeps going: one glob that
-                        # matches nothing would otherwise abandon the rest of
-                        # the chunk, which now holds other packages too.
-                        $batch_lines += "-rm $rdir/${pkg}_*"
-                    }
-                    $batch_lines += "put $($zip.FullName) $rdir/$zip_name"
-                    $batch_lines += "chmod 664 $rdir/$zip_name"
+                    ($using:upload_failures).Add("$($zip.Name) ($using:remote_dir)")
                 }
-
-                [io.file]::WriteAllText($batch.FullName, (($batch_lines -join "`n") + "`n"))
-
-                # sftp writes to stderr in the ordinary course of working: the
-                # "Connected to ..." banner up front, and on disconnect it can
-                # report "close - IO is still pending on closed socket", a
-                # client-side Win32 OpenSSH bug (Win32-OpenSSH#1899) emitted
-                # after the transfers with an exit status of 0. Windows
-                # PowerShell turns a native command's redirected stderr into an
-                # error record, which receive-job re-raises in the parent where
-                # erroractionpreference stop then killed the whole run -- having
-                # already uploaded the files.
-                #
-                # Capturing it is not what avoids that: 2>&1 and 2>$null both
-                # raise the record before disposing of it, and what saves this
-                # call is that a thread job's runspace starts at continue rather
-                # than inheriting stop. Set it here so that is a decision and
-                # not a default, and judge the upload by the exit status, which
-                # is what actually says whether the puts worked.
-                $erroractionpreference = 'continue'
-
-                $sftp_out  = sftp -b $batch sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/ 2>&1 | out-string
-                $sftp_code = $LASTEXITCODE
-
-                remove-item $batch
-
-                if ($sftp_code -ne 0) {
-                    foreach ($zip in $chunk) {
-                        ($using:upload_failures).Add("$($zip.Name) ($using:remote_dir)")
-                    }
-                    write-warning "sftp exited $sftp_code uploading to $rdir; these are not published: $(($chunk | % Name) -join ', ')`n$($sftp_out.trim())"
-                }
-                else {
-                    "Uploaded $($chunk.count) package(s) to $rdir."
-                }
+                write-warning "sftp exited $sftp_code uploading to $rdir; these are not published: $(($chunk | % Name) -join ', ')`n$($sftp_out.trim())"
             }
-        } | receive-job -wait -autoremovejob
-    }
+            else {
+                "Uploaded $($chunk.count) package(s) to $rdir."
+            }
+        }
+    } | receive-job -wait -autoremovejob
 }
 
 popd
