@@ -585,7 +585,18 @@ $script:updated_toolkits  = @{}
 $script:updated_binpkg    = $false
 
 function rewrite_vcpkg_root([string]$old_root, [string]$new_root) {
-    set-alias -force -scope global vcpkg (join-path $new_root $(if ($iswindows) { 'vcpkg.exe' } else { 'vcpkg' }))
+    # Both scopes. The global one is what the scripts see; the module's own is
+    # what the functions in this file resolve, and they do not see the global
+    # one, so rebinding only there left everything inside the module running
+    # whichever exe was bound at import. Under a toolkit that is not merely the
+    # wrong binary but the wrong tree: vcpkg detects its root from where it
+    # sits, says it is "ignoring mismatched VCPKG_ROOT environment value
+    # C:\source\repos\vcpkg-v143", and reads ports and installed packages from
+    # the default checkout instead of v143's.
+    $vcpkg_exe = join-path $new_root $(if ($iswindows) { 'vcpkg.exe' } else { 'vcpkg' })
+
+    set-alias -force -scope global vcpkg $vcpkg_exe
+    set-alias -force -scope script vcpkg $vcpkg_exe
 
     if (-not $old_root -or $old_root -ieq $new_root) { return }
 
