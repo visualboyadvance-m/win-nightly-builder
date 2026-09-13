@@ -176,10 +176,47 @@ foreach ($item in $plan) {
 
 pushd $stage_dir
 
-gci -n | %{ ("put {0}`nchmod 664 {0}" -f $_) | sftp sftpuser@posixsh.org:nightly.visualboyadvance-m.org/ }
+# sftp announces "Connected to ..." on stderr before it transfers anything.
+# Windows PowerShell turns a native command's redirected stderr -- and the
+# scheduled task's `*>>` redirects all of it -- into a NativeCommandError
+# record, so every single upload wrapped that one line in a page of error
+# formatting, and the day erroractionpreference stops being commented out at
+# the top of this script it would abort the run outright.
+#
+# Redirecting is not the fix: 2>&1 and 2>$null both raise the record before
+# disposing of it. Lowering the preference around the call is. That happens in
+# a function so it is scoped and put back on the way out -- a foreach-object
+# block would not do, it runs in the caller's scope and the setting would leak
+# to the rest of the script. Everything sftp says that is worth reading --
+# "Uploading ... to ...", "Changing mode on ..." -- is on stdout and still
+# lands in the log; what is left to judge the upload by is the exit status,
+# which the engine leaves in $LASTEXITCODE for the caller to read.
+function upload_file([string]$name) {
+    $erroractionpreference = 'continue'
+
+    ("put {0}`nchmod 664 {0}" -f $name) | sftp sftpuser@posixsh.org:nightly.visualboyadvance-m.org/ 2>$null
+}
+
+$upload_failures = @()
+
+gci -n | %{
+    upload_file $_
+
+    if ($LASTEXITCODE -ne 0) {
+        $upload_failures += $_
+        write-warning "sftp exited $LASTEXITCODE uploading ${_}: not published"
+    }
+}
 
 popd
 
 ri -r -fo $stage_dir
 
-'INFO: Build successful!'
+# Not "successful" when something did not go out: a nightly that says it
+# published and did not is the one failure nobody goes looking for.
+if ($upload_failures) {
+    write-error "failed to upload: $($upload_failures -join ', ')"
+}
+else {
+    'INFO: Build successful!'
+}

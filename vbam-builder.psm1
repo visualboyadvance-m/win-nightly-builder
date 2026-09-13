@@ -136,6 +136,27 @@ if (-not $env:VCPKG_ROOT) {
 
 set-alias -force vcpkg (join-path $env:VCPKG_ROOT $(if ($iswindows) { 'vcpkg.exe' } else { 'vcpkg' }))
 
+# Run vcpkg without letting a progress line abort the caller.
+#
+# Windows PowerShell -- what the scheduled tasks run -- turns a native
+# command's redirected stderr into a NativeCommandError record, and the tasks
+# redirect all of it with `*>>`, so under an erroractionpreference of stop
+# anything vcpkg says on stderr is terminating however harmless it is. "note:
+# waiting to take filesystem lock..." ended a nightly after fifty-four lines of
+# log, with nothing built and nothing uploaded, because another vcpkg happened
+# to be holding the tree.
+#
+# Redirecting does not help: 2>&1 and 2>$null both raise the record before
+# disposing of it. Lowering the preference does, and a function is where it can
+# be lowered without leaking -- a foreach-object block runs in the caller's
+# scope and would leave the setting behind. What is left to judge a run by is
+# the exit status, which the engine leaves in $LASTEXITCODE for the caller.
+function vcpkg_run {
+    $erroractionpreference = 'continue'
+
+    vcpkg @args
+}
+
 # The overlay repo, used on every platform.
 $OVERLAY_PORTS  = join-path $REPOS_ROOT vcpkg-overlay
 
@@ -480,6 +501,11 @@ if ($iswindows) {
 # vcpkg-list and vcpkg-mkpkg live in their own repo.
 # setup_build_env pulls them in, once per session.
 function update_binpkg_module {
+    # git reports "Already up to date." and every fetch line on stderr, and a
+    # clone reports all of its progress there. See vcpkg_run above for why that
+    # is fatal under Windows PowerShell and why only the preference helps.
+    $erroractionpreference = 'continue'
+
     if (-not (test-path $REPOS_ROOT/vcpkg-binpkg-prototype)) {
         pushd $REPOS_ROOT
 
@@ -498,6 +524,11 @@ function update_binpkg_module {
 }
 
 function update_vcpkg([string]$toolkit = '') {
+    # git's fetch output and bootstrap-vcpkg's download chatter both go to
+    # stderr; see vcpkg_run above. A vcpkg tree that cannot be updated is not a
+    # reason to abandon the run -- the one already on disk still builds.
+    $erroractionpreference = 'continue'
+
     $vcpkg_dir  = if ($toolkit) { $env:VCPKG_ROOT.TrimEnd('/\') + "-$toolkit" } else { $env:VCPKG_ROOT }
     $vcpkg_name = split-path -leaf $vcpkg_dir
 
@@ -945,5 +976,5 @@ function task_action {
 }
 
 export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_ports,task_action `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_ports,task_action,vcpkg_run `
 		    -alias vcpkg

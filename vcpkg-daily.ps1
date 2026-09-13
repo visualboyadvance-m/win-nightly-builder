@@ -215,7 +215,7 @@ function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
         write-error "refusing to run 'vcpkg upgrade' with no port named (triplet $triplet)"
     }
 
-    vcpkg --triplet $triplet --host-triplet $host_triplet upgrade `
+    vcpkg_run --triplet $triplet --host-triplet $host_triplet upgrade `
         --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
 }
 
@@ -299,7 +299,7 @@ foreach ($triplet in $build_triplets) {
         # port in the list installs against the copy it is going to keep, and
         # $DEP_PORTS is ordered so a port's dependencies come before it.
         foreach ($port in $build_ports) {
-            vcpkg --triplet $triplet --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $port
+            vcpkg_run --triplet $triplet --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $port
 
             $port_name = $port -replace '\[[^\]]+\]',''
 
@@ -424,7 +424,7 @@ foreach ($triplet in $build_triplets) {
 
                 # Interleaved for the reason the target ports above are.
                 foreach ($dep in $host_ports) {
-                    vcpkg --triplet $target_host_t --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
+                    vcpkg_run --triplet $target_host_t --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
 
                     $dep_name = $dep -replace '\[[^\]]+\]',''
 
@@ -503,9 +503,20 @@ foreach ($triplet in $build_triplets) {
         #
         # Match the names instead of counting what comes before them, and ask
         # for one per line so a short name cannot share one.
-        $existing_pkgs = @('ls -1' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | %{
-            if ($_ -match '^\s*([^_\s]+)_[^_\s]+_[^_\s]+\.zip\s*$') { $matches[1] }
-        }) | select-object -unique
+        #
+        # In its own scope for the erroractionpreference: the banner is on
+        # stderr, Windows PowerShell turns a native command's redirected stderr
+        # into a NativeCommandError, and stop makes the first one terminating,
+        # so saying hello would abort the upload pass. The 2>$null does not
+        # avoid that on its own -- the record is raised before it is discarded
+        # -- it only keeps the banner out of the names below.
+        $existing_pkgs = & {
+            $erroractionpreference = 'continue'
+
+            @('ls -1' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | %{
+                if ($_ -match '^\s*([^_\s]+)_[^_\s]+_[^_\s]+\.zip\s*$') { $matches[1] }
+            }) | select-object -unique
+        }
         # One sftp session per chunk of packages rather than one per package.
         # Every connection is another chance at the teardown bug handled
         # below, and a triplet has dozens of packages, so a run was doing
@@ -547,16 +558,24 @@ foreach ($triplet in $build_triplets) {
 
                 [io.file]::WriteAllText($batch.FullName, (($batch_lines -join "`n") + "`n"))
 
-                # On disconnect sftp can report "close - IO is still pending
-                # on closed socket" -- a client-side Win32 OpenSSH bug
-                # (Win32-OpenSSH#1899), emitted after the transfers, with an
-                # exit status of 0. It goes to stderr, and a native command's
-                # stderr inside a thread job becomes an error record that
-                # receive-job re-raises in the parent, where
-                # erroractionpreference stop then killed the whole run --
-                # having already uploaded the files. So capture it and judge
-                # by the exit status, which is what actually says whether the
-                # puts worked.
+                # sftp writes to stderr in the ordinary course of working: the
+                # "Connected to ..." banner up front, and on disconnect it can
+                # report "close - IO is still pending on closed socket", a
+                # client-side Win32 OpenSSH bug (Win32-OpenSSH#1899) emitted
+                # after the transfers with an exit status of 0. Windows
+                # PowerShell turns a native command's redirected stderr into an
+                # error record, which receive-job re-raises in the parent where
+                # erroractionpreference stop then killed the whole run -- having
+                # already uploaded the files.
+                #
+                # Capturing it is not what avoids that: 2>&1 and 2>$null both
+                # raise the record before disposing of it, and what saves this
+                # call is that a thread job's runspace starts at continue rather
+                # than inheriting stop. Set it here so that is a decision and
+                # not a default, and judge the upload by the exit status, which
+                # is what actually says whether the puts worked.
+                $erroractionpreference = 'continue'
+
                 $sftp_out  = sftp -b $batch sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/ 2>&1 | out-string
                 $sftp_code = $LASTEXITCODE
 
