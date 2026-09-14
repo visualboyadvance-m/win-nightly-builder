@@ -520,6 +520,10 @@ if ($iswindows) {
 # Keyed on the resolved path, so two spellings of one checkout share a lock, and
 # kept in TEMP, which is per-user and therefore the same directory for the tasks
 # -- they run as this user under s4u -- and for a manual run.
+# The lock files this session has made, for remove_git_locks below to clear out.
+$script:git_lock_files = [System.Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::OrdinalIgnoreCase)
+
 function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800) {
     $full = $(if ($resolved = resolve-path $path -ea ignore) { $resolved.path } else { $path })
     $key  = $full.Replace('/', '\').TrimEnd('\').ToLower()
@@ -533,8 +537,12 @@ function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800) {
 
     while ($true) {
 	try {
-	    return [IO.File]::Open($lock_path, [IO.FileMode]::OpenOrCreate,
-				   [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+	    $lock = [IO.File]::Open($lock_path, [IO.FileMode]::OpenOrCreate,
+				    [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+
+	    [void]$script:git_lock_files.Add($lock_path)
+
+	    return $lock
 	}
 	catch [IO.IOException] {
 	    # Waiting for ever is worse than racing: a nightly that never
@@ -555,8 +563,47 @@ function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800) {
 }
 
 function release_git_lock($lock) {
-    if ($lock) { $lock.Dispose() }
+    if (-not $lock) { return }
+
+    $lock_file = $lock.Name
+
+    $lock.Dispose()
+
+    # Where the lock files actually get cleared: releasing is the one point
+    # that is reached on every path, the callers all releasing in a finally.
+    # remove_git_locks below is a sweep for what a caller did not get to.
+    #
+    # Deleting is safe only because the handle is opened with FileShare.None:
+    # Windows refuses to delete a file another process still holds open, so the
+    # delete can succeed only while nobody has the lock. A waiter that took it
+    # between the Dispose above and this line keeps it, and the delete fails --
+    # which is the right outcome, hence -ea ignore. If it could delete a held
+    # lock, the next caller would create a fresh file of the same name and come
+    # away holding a second exclusive lock on the same checkout.
+    remove-item $lock_file -force -ea ignore
+
+    [void]$script:git_lock_files.Remove($lock_file)
 }
+
+# The sweep for locks release_git_lock did not get to, on the same terms: a
+# delete that fails is a lock somebody else is holding, which is the one to
+# leave alone.
+function remove_git_locks {
+    foreach ($lock_file in @($script:git_lock_files)) {
+        remove-item $lock_file -force -ea ignore
+
+        if (-not (test-path $lock_file)) { [void]$script:git_lock_files.Remove($lock_file) }
+    }
+}
+
+# remove-module, which is also what an import-module -force does to the copy it
+# replaces. It is the only teardown hook that runs: PowerShell.Exiting and
+# AppDomain.ProcessExit were both tried here and neither fires for
+# `powershell.exe -File` or `-Command`, which is how every task starts, so
+# nothing runs at the end of a run and release_git_lock has to do the work.
+# Nothing runs if the process is killed either, and nothing can -- what is left
+# behind is an empty file the next run opens again, so the cost of that is nil.
+$ExecutionContext.SessionState.Module.OnRemove = { remove_git_locks }
 
 # Bring a checkout up to date, cloning it first if it is not there, with the
 # lock above held for the whole of it so that two runs queue instead of racing.
@@ -658,6 +705,23 @@ function update_binpkg_module {
     import-module -global -force "$REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 }
 
+# Whether bootstrap could replace the exe if it were run. Absent is writable:
+# putting it there for the first time is what a bootstrap is for.
+function vcpkg_exe_writable([string]$vcpkg_dir) {
+    $exe = join-path $vcpkg_dir $(if ($iswindows) { 'vcpkg.exe' } else { 'vcpkg' })
+
+    if (-not (test-path $exe)) { return $true }
+
+    try {
+        $handle = [IO.File]::Open($exe, [IO.FileMode]::Open,
+                                  [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $handle.Dispose()
+
+        $true
+    }
+    catch { $false }
+}
+
 function update_vcpkg([string]$toolkit = '') {
     # bootstrap-vcpkg's download chatter goes to stderr; see vcpkg_run above. A
     # tree that cannot be bootstrapped is not a reason to abandon the run, the
@@ -669,12 +733,23 @@ function update_vcpkg([string]$toolkit = '') {
 
     update_git_checkout $vcpkg_dir -origin git@github.com:microsoft/vcpkg
 
-    pushd $vcpkg_dir
+    # bootstrap replaces vcpkg.exe, and it cannot while another run is using
+    # that tree: Windows holds a running executable's image open, and a
+    # bootstrap already in flight has the file open to write it. The download
+    # then fails on a file it cannot open and says so in a page of error
+    # formatting, having interrupted nothing but itself. Ask whether the file
+    # can be written before trying, and leave the bootstrap to the run that can.
+    if (vcpkg_exe_writable $vcpkg_dir) {
+        pushd $vcpkg_dir
 
-    if ($iswindows) { ./bootstrap-vcpkg.bat }
-    else            { ./bootstrap-vcpkg.sh }
+        if ($iswindows) { ./bootstrap-vcpkg.bat }
+        else            { ./bootstrap-vcpkg.sh }
 
-    popd
+        popd
+    }
+    else {
+        write-warning "vcpkg in $vcpkg_dir is in use, leaving the bootstrap to the run that has it"
+    }
 
     if (-not $islinux) {
         update_git_checkout $env:VCPKG_OVERLAY_PORTS `
