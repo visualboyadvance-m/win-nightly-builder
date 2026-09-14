@@ -7,20 +7,8 @@ $build_triplets = get-triplets @args
 
 $repo_path = join-path $REPOS_ROOT visualboyadvance-m
 
-if (-not (test-path $repo_path)) {
-    pushd $REPOS_ROOT
-
-    git clone git@github.com:visualboyadvance-m/visualboyadvance-m
-
-    popd
-}
-
-pushd $repo_path
-
-git pull --rebase
-git submodule update --init --recursive
-
-popd
+update_git_checkout $repo_path -submodules `
+    -origin git@github.com:visualboyadvance-m/visualboyadvance-m
 
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {

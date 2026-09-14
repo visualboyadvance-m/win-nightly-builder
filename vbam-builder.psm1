@@ -500,61 +500,176 @@ if ($iswindows) {
 
 # vcpkg-list and vcpkg-mkpkg live in their own repo.
 # setup_build_env pulls them in, once per session.
-function update_binpkg_module {
-    # git reports "Already up to date." and every fetch line on stderr, and a
-    # clone reports all of its progress there. See vcpkg_run above for why that
-    # is fatal under Windows PowerShell and why only the preference helps.
+# One updater per checkout at a time.
+#
+# The tasks overlap by design -- update-repos runs on the hour, the nightlies
+# at 23:00, the vcpkg upgrade at 21:00 -- and a manual run lands wherever it
+# lands, so two of them regularly work on the same checkout at once. git locks
+# refs/remotes/origin/<branch>, so the loser of that race reports "unable to
+# update local ref". FETCH_HEAD has no lock on it at all: two fetches interleave
+# their writes, git pull then finds more than one line in it that is not marked
+# not-for-merge, and refuses with "fatal: Cannot rebase onto multiple branches".
+# Nothing is damaged, but the run that lost the race does not get the update it
+# asked for, and says so in a page of error formatting.
+#
+# A lock file rather than a named mutex: a Global\ mutex wants a privilege a
+# non-elevated manual run has not got, and Windows releases an exclusively
+# opened file when the process holding it exits, so a nightly killed mid-fetch
+# cannot wedge every run after it.
+#
+# Keyed on the resolved path, so two spellings of one checkout share a lock, and
+# kept in TEMP, which is per-user and therefore the same directory for the tasks
+# -- they run as this user under s4u -- and for a manual run.
+function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800) {
+    $full = $(if ($resolved = resolve-path $path -ea ignore) { $resolved.path } else { $path })
+    $key  = $full.Replace('/', '\').TrimEnd('\').ToLower()
+    $hash = [BitConverter]::ToString(
+	[Security.Cryptography.SHA256]::Create().ComputeHash(
+	    [Text.Encoding]::UTF8.GetBytes($key))).Replace('-', '').Substring(0, 16)
+
+    $lock_path = join-path ([IO.Path]::GetTempPath()) "vbam-git-$hash.lock"
+    $deadline  = (get-date).AddSeconds($timeout_seconds)
+    $waited    = $false
+
+    while ($true) {
+	try {
+	    return [IO.File]::Open($lock_path, [IO.FileMode]::OpenOrCreate,
+				   [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+	}
+	catch [IO.IOException] {
+	    # Waiting for ever is worse than racing: a nightly that never
+	    # finishes would take every run after it down with it.
+	    if ((get-date) -ge $deadline) {
+		write-warning "waited $timeout_seconds s for another run to finish with $full, going ahead without the lock"
+		return $null
+	    }
+
+	    if (-not $waited) {
+		$waited = $true
+		write-warning "another run is working on $full, waiting for it to finish..."
+	    }
+
+	    start-sleep -milliseconds 500
+	}
+    }
+}
+
+function release_git_lock($lock) {
+    if ($lock) { $lock.Dispose() }
+}
+
+# Bring a checkout up to date, cloning it first if it is not there, with the
+# lock above held for the whole of it so that two runs queue instead of racing.
+#
+# Only a clean master checkout is touched. A rebase onto a dirty tree fails
+# anyway, and a checkout parked on another branch is somebody working in it, not
+# something to drag forward underneath them.
+#
+# Callers that need a wider critical section than one update -- build-nightly
+# decides whether to build from what the fetch brought in and only then pulls,
+# and the wxwidgets bump commits and pushes -- take acquire_git_lock themselves.
+function update_git_checkout {
+    param(
+	[parameter(mandatory)][string]$path,
+	[string]$origin,
+	[switch]$submodules
+    )
+
+    # git says everything it does on stderr, "From github.com:..." included, and
+    # Windows PowerShell turns a native command's redirected stderr into a
+    # NativeCommandError that erroractionpreference stop makes terminating. See
+    # vcpkg_run above. The exit status is what says whether git worked.
     $erroractionpreference = 'continue'
 
-    if (-not (test-path $REPOS_ROOT/vcpkg-binpkg-prototype)) {
-        pushd $REPOS_ROOT
+    $lock = acquire_git_lock $path
 
-        git clone git@github.com:rkitover/vcpkg-binpkg-prototype
+    try {
+	if (-not (test-path $path)) {
+	    if (-not $origin) {
+		write-warning "no checkout at $path and no origin to clone it from"
+		return
+	    }
 
-        popd
+	    $parent = split-path -parent $path
+
+	    if ($parent -and -not (test-path $parent)) { ni -it dir $parent -force | out-null }
+
+	    git clone $origin $path
+
+	    if ($lastexitcode -ne 0) {
+		write-warning "cloning $origin into ${path}: git exited $lastexitcode"
+		return
+	    }
+	}
+
+	pushd $path
+
+	try {
+	    # A directory that is there with no repository in it gets adopted
+	    # rather than cloned over the top, which is how a toolkit tree made
+	    # by hand picks up its history.
+	    if (-not (test-path .git)) {
+		if (-not $origin) {
+		    write-warning "no repository in $path and no origin to point one at"
+		    return
+		}
+
+		git init
+		git remote add origin $origin
+		git fetch --all --prune
+		git reset --hard origin/master
+		git branch --set-upstream-to=origin/master master
+	    }
+
+	    # Last line, so a stray warning from git cannot be mistaken for the branch.
+	    $branch = @(git rev-parse --abbrev-ref HEAD)[-1]
+
+	    if ($branch -ne 'master') {
+		write-warning "Skipping '$path', on branch '$branch' rather than 'master'."
+		return
+	    }
+
+	    if (git status --porcelain) {
+		write-warning "Skipping '$path', working tree is not clean."
+		return
+	    }
+
+	    git fetch --all --prune
+	    git pull --rebase
+
+	    if ($lastexitcode -ne 0) {
+		write-warning "Updating '$path' failed, git pull exited with $lastexitcode."
+		return
+	    }
+
+	    if ($submodules) {
+		git submodule update --init --recursive
+		git submodule update
+	    }
+	}
+	finally { popd }
     }
-
-    pushd $REPOS_ROOT/vcpkg-binpkg-prototype
-
-    git pull --rebase
-
-    popd
+    finally { release_git_lock $lock }
+}
+function update_binpkg_module {
+    update_git_checkout "$REPOS_ROOT/vcpkg-binpkg-prototype" `
+	-origin git@github.com:rkitover/vcpkg-binpkg-prototype
 
     import-module -global -force "$REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 }
 
 function update_vcpkg([string]$toolkit = '') {
-    # git's fetch output and bootstrap-vcpkg's download chatter both go to
-    # stderr; see vcpkg_run above. A vcpkg tree that cannot be updated is not a
-    # reason to abandon the run -- the one already on disk still builds.
+    # bootstrap-vcpkg's download chatter goes to stderr; see vcpkg_run above. A
+    # tree that cannot be bootstrapped is not a reason to abandon the run, the
+    # exe already on disk still builds. The checkouts look after themselves --
+    # update_git_checkout relaxes the preference of its own.
     $erroractionpreference = 'continue'
 
-    $vcpkg_dir  = if ($toolkit) { $env:VCPKG_ROOT.TrimEnd('/\') + "-$toolkit" } else { $env:VCPKG_ROOT }
-    $vcpkg_name = split-path -leaf $vcpkg_dir
+    $vcpkg_dir = if ($toolkit) { $env:VCPKG_ROOT.TrimEnd('/\') + "-$toolkit" } else { $env:VCPKG_ROOT }
 
-    if (-not (test-path $vcpkg_dir)) {
-	pushd $REPOS_ROOT
-
-	git clone git@github.com:microsoft/vcpkg $vcpkg_name
-
-	popd
-    }
-
-    if (-not (test-path $vcpkg_dir/.git)) {
-	pushd $vcpkg_dir
-
-	git init
-	git remote add origin https://github.com/microsoft/vcpkg.git
-	git fetch --all --prune
-	git reset --hard origin/master
-	git branch --set-upstream-to=origin/master master
-
-	popd
-    }
+    update_git_checkout $vcpkg_dir -origin git@github.com:microsoft/vcpkg
 
     pushd $vcpkg_dir
-
-    git pull --rebase
 
     if ($iswindows) { ./bootstrap-vcpkg.bat }
     else            { ./bootstrap-vcpkg.sh }
@@ -562,19 +677,8 @@ function update_vcpkg([string]$toolkit = '') {
     popd
 
     if (-not $islinux) {
-        if (-not (test-path $env:VCPKG_OVERLAY_PORTS)) {
-            pushd $REPOS_ROOT
-
-            git clone git@github.com:visualboyadvance-m/vcpkg-overlay
-
-            popd
-        }
-
-        pushd $env:VCPKG_OVERLAY_PORTS
-
-        git pull --rebase
-
-        popd
+        update_git_checkout $env:VCPKG_OVERLAY_PORTS `
+            -origin git@github.com:visualboyadvance-m/vcpkg-overlay
     }
 }
 
@@ -987,5 +1091,6 @@ function task_action {
 }
 
 export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_ports,task_action,vcpkg_run `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_ports,task_action,vcpkg_run, `
+		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg

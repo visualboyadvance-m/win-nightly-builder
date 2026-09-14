@@ -148,7 +148,16 @@ if ('wxwidgets' -in $selected_port_names) {
 
     ri -r -fo $temp_dir
 
-    pushd $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS })
+    $overlay_dir = $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS })
+
+    # Held for the pull, the commit and the push together rather than through
+    # update_git_checkout, which is one update and would let another run in
+    # between this one reading the portfile and pushing its rewrite of it. The
+    # --autostash is why this could not use it in any case: the whole point here
+    # is a tree with a local edit in it.
+    $overlay_lock = acquire_git_lock $overlay_dir
+
+    pushd $overlay_dir
 
     # Every builder runs this, so pick up whichever one got here first: the hash
     # check below then sees its commit and there is nothing left to do.
@@ -199,6 +208,8 @@ if ('wxwidgets' -in $selected_port_names) {
     }
 
     popd
+
+    release_git_lock $overlay_lock
 }
 
 # Every upgrade in this script goes through here so that none of them can go

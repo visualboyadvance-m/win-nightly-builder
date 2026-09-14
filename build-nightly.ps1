@@ -58,6 +58,13 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
 	$forced = $true
     }
 
+    # The lock covers the fetch, the decision made from what it brought in, and
+    # the pull that acts on it. update_git_checkout is no use here: the pull is
+    # conditional -- a run that finds nothing worth building leaves HEAD where
+    # it is so the next one sees the change again -- and another run pulling in
+    # between would decide this one's question for it.
+    $repo_lock = acquire_git_lock $repo_path
+
     pushd $repo_path
 
     git fetch --all --prune
@@ -85,6 +92,7 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
 	(-not $translations_only)) {
 	"INFO: No changes to build in ${repo_name}."
 	popd
+	release_git_lock $repo_lock
 	continue
     }
 
@@ -95,6 +103,8 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
     git pull --rebase
 
     popd
+
+    release_git_lock $repo_lock
 
     $repo_triplets = @($build_triplets | ?{ (repo_for_triplet $_) -eq $repo_path })
 
