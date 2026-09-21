@@ -1057,6 +1057,53 @@ describe 'HOST_TRIPLETS' {
     }
 }
 
+# ── get_host_dep_ports ────────────────────────────────────
+#
+# The build tooling a triplet gets a copy of: the host triplets and nothing
+# else. vcpkg-daily.ps1 adds it to each triplet's own port list.
+
+describe 'get_host_dep_ports' {
+
+    it 'gives the host tooling to a triplet that can host a build' {
+        foreach ($t in $HOST_TRIPLETS) {
+            @(get_host_dep_ports $t) | should -be @($HOST_DEP_PORTS)
+        }
+    }
+
+    it 'names glslang with its tools feature' {
+        # The executables are the point; the libraries arrive transitively
+        # under the ports that link them.
+        $HOST_DEP_PORTS | should -contain 'glslang[tools]'
+    }
+
+    it 'gives a cross target none of it' {
+        # A shader compiler built for the target is one the builder cannot
+        # run. -static, mingw and android are targets, not machines.
+        foreach ($t in @('x64-windows-static', 'x86-mingw-static', 'arm64-android')) {
+            @(get_host_dep_ports $t) | should -be @()
+        }
+    }
+
+    it 'gives nothing for no triplet at all' {
+        @(get_host_dep_ports) | should -be @()
+    }
+
+    it 'is included in the names --packages accepts' {
+        # vcpkg-daily.ps1 validates --packages/--skip-packages against this,
+        # and these ports are part of what a host triplet builds.
+        foreach ($n in @($HOST_DEP_PORT_NAMES)) { $n | should -bein $ALL_DEP_PORT_NAMES }
+    }
+
+    it 'is not in the list every triplet links' {
+        # Kept out of $DEP_PORTS: that list is what a build links, which every
+        # triplet needs its own copy of.
+        foreach ($n in @($HOST_DEP_PORT_NAMES)) {
+            $n | should -not -bein (& $script:vbam { $DEP_PORT_NAMES })
+            $n | should -not -bein (& $script:vbam { $ANDROID_DEP_PORT_NAMES })
+        }
+    }
+}
+
 # ── get_host_ports plan parsing ─────────────────────────────────────
 #
 # The install plans are fed in rather than run: what is under test is the

@@ -86,8 +86,26 @@ $ANDROID_DEP_PORTS = @('vulkan', 'qtbase', 'qttools', 'tiff') +
 
 $ANDROID_DEP_PORT_NAMES = $ANDROID_DEP_PORTS -replace '\[[^\]]+\]',''
 
-# Every port name either list can name, for validating --packages/--skip-packages.
-$ALL_DEP_PORT_NAMES = @($DEP_PORT_NAMES) + @($ANDROID_DEP_PORT_NAMES) | select-object -unique
+# Build tooling, wanted on the machine doing the building and nowhere else.
+# glslang[tools] is the glslangValidator and spirv-remap executables. The
+# emulator's shaders are compiled during its build, by a binary that has to run
+# on the build machine, so what a cross target wants is the *host* copy -- a
+# target-architecture build of it is a compiler the builder cannot run, and on
+# Android a shader compiler shipped in an APK that nothing would execute.
+# Naming it here is what gets it built and published for every host triplet the
+# platform defines, so a consumer restoring the packages finds the tools sitting
+# there instead of compiling glslang from source.
+#
+# The [tools] feature is the whole point of asking for it: the libraries arrive
+# transitively under the ports that link them, and only this feature installs
+# the executables.
+$HOST_DEP_PORTS = @('glslang[tools]')
+
+$HOST_DEP_PORT_NAMES = $HOST_DEP_PORTS -replace '\[[^\]]+\]',''
+
+# Every port name any list can name, for validating --packages/--skip-packages.
+$ALL_DEP_PORT_NAMES = @($DEP_PORT_NAMES) + @($ANDROID_DEP_PORT_NAMES) + @($HOST_DEP_PORT_NAMES) |
+                      select-object -unique
 
 $TRIPLETS       = if ($iswindows) {
 		      'x86-mingw-static','x64-mingw-static',(echo x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }) | echo
@@ -955,6 +973,16 @@ function get_dep_ports([string]$triplet = '') {
     if ($triplet -match '-android$') { $ANDROID_DEP_PORTS } else { $DEP_PORTS }
 }
 
+# The host tooling a triplet wants: $HOST_DEP_PORTS for a triplet that can host
+# a build, nothing for anything else. A target triplet -- -static, mingw,
+# android -- gets none of it: the tools run on the builder, which is the host
+# triplet's copy, and building them for the target would be building a compiler
+# for the wrong machine. Kept apart from get_dep_ports because that list is what
+# a build *links*, which every triplet needs a copy of.
+function get_host_dep_ports([string]$triplet = '') {
+    if ("$triplet" -in $HOST_TRIPLETS) { $HOST_DEP_PORTS } else { @() }
+}
+
 # Plans already read, keyed by triplet, host triplet and the tree they came
 # from. See get_host_ports below.
 $script:host_plans = @{}
@@ -1165,7 +1193,7 @@ function task_action {
 	    " *>> $ROOT/logs/$log")
 }
 
-export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_ports,task_action,vcpkg_run, `
+export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,task_action,vcpkg_run, `
 		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg

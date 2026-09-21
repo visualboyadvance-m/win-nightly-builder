@@ -49,10 +49,12 @@ if ($skip_packages) {
 }
 
 # Which ports a triplet wants is a property of the triplet, not of the host:
-# an Android triplet takes the cross list, everything else the host's own. The
-# --packages/--skip-packages filters then apply to whichever list that is.
+# an Android triplet takes the cross list, everything else the host's own, plus
+# the build tooling in $HOST_DEP_PORTS for a triplet that can host a build --
+# glslang's compilers run on the builder, so only the host triplets get a copy.
+# The --packages/--skip-packages filters then apply to whichever list that is.
 function selected_ports([string]$triplet) {
-    $ports = get_dep_ports $triplet
+    $ports = @(get_dep_ports $triplet) + @(get_host_dep_ports $triplet)
     if ($packages)      { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -in $packages } }
     if ($skip_packages) { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $skip_packages } }
     @($ports)
@@ -74,7 +76,7 @@ function android_host_ports([string]$triplet) {
     # A port the triplet's own list already names keeps that list's spec: its
     # features are the ones the emulator's CMakeLists asks for, and naming one
     # port twice with two feature sets only has vcpkg rebuild it back and forth.
-    $own   = @(get_dep_ports $triplet) -replace '\[[^\]]+\]',''
+    $own   = @(@(get_dep_ports $triplet) + @(get_host_dep_ports $triplet)) -replace '\[[^\]]+\]',''
     $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $own }
 
     # The same filters the triplet's own list gets: these are part of what a
