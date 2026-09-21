@@ -16,7 +16,18 @@ if (-not (get-command start-threadjob -ea ignore)) {
     }
 }
 
-$stage_dir = "$env:TEMP/vbam-daily-packages"
+# One staging tree per run, under a shared root.
+#
+# It was a single directory, cleared at the start of every run -- which makes
+# starting a run the act of deleting whatever another one has packed and not
+# yet put. The 09-21 nightly did that to a manual run: it began at 21:00:31,
+# found everything already built, cleared the tree, and the run that had packed
+# into it failed on the first directory it reached that was no longer there,
+# seven triplets having gone up already and the rest never going up at all.
+# Git operations are locked for parallel runs; this is the other thing two runs
+# share.
+$stage_root = "$env:TEMP/vbam-daily-packages"
+$stage_dir  = "$stage_root/$PID"
 
 $packages      = $null
 $skip_packages = @()
@@ -233,6 +244,23 @@ function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
 }
 
 # Build and generate binary packages
+
+ni -it dir $stage_root -ea ignore | out-null
+
+# What earlier runs left behind, taking only the trees whose run is gone: a
+# directory named for a live pid belongs to a run still working and is the
+# thing this whole arrangement exists to leave alone. A name that is not a pid
+# at all is debris from before this was per-run -- the triplet directories the
+# single tree held -- and goes.
+#
+# The cast is checked before get-process sees it. A null id is a parameter
+# binding failure, which -ea ignore does not cover, so handing it one would
+# take the run down on exactly that leftover debris.
+gci $stage_root -directory -ea ignore | ?{
+    $owner = $_.Name -as [int]
+
+    (-not $owner) -or -not (get-process -id $owner -ea ignore)
+} | %{ ri -r -fo $_.FullName -ea ignore }
 
 ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir -ea ignore | out-null
@@ -602,16 +630,41 @@ $upload_failures = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
 # The pairs that were packed are the pairs to upload: a directory with packages
 # in it is a directory to put.
 foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
-    # Emptied by the packing pass above where the run rebuilt nothing for this
-    # pair. There is no directory to put and nothing to replace, so do not open
-    # a session to find that out.
-    if (-not $unit.Packages) { continue }
-
     $triplet        = $unit.Triplet
     $tk             = $unit.Toolkit
     $pkg_subdir     = if ($tk) { "$triplet/$tk" } else { $triplet }
     $remote_dir     = "vcpkg/$pkg_subdir"
     $pkg_subdir_abs = join-path $stage_dir $pkg_subdir
+
+    # What is staged is what there is to put. Asking the directory rather than
+    # the bookkeeping is the whole of it: a pair the run rebuilt nothing for
+    # never had a directory made, and one whose packages all failed to pack has
+    # an empty one, and neither is something to open a session for.
+    #
+    # gci on a directory that is not there is a terminating error under this
+    # script's erroractionpreference, so getting this wrong does not skip one
+    # pair, it abandons every pair after it: on 09-21 x86-windows-static took
+    # the four v143 directories with it, seven triplets having already gone up.
+    # Reading $unit.Packages here is what did that -- it says what the packing
+    # pass was asked for, which is not the same as what it produced.
+    #
+    # Packages recorded against a pair with nothing on disk for them is that
+    # disagreement, and it goes in the failures rather than passing quietly:
+    # skipping the upload is right either way, but something not having been
+    # packed that this loop expected is worth saying out loud.
+    $zips = @(if (test-path -literalpath $pkg_subdir_abs) {
+        gci -literalpath $pkg_subdir_abs -filter '*.zip'
+    })
+
+    if (-not $zips) {
+        if ($unit.Packages) {
+            $upload_failures.Add("$($unit.Packages -join ', ') ($remote_dir)")
+            write-warning "nothing staged under $pkg_subdir_abs, so not uploading: $($unit.Packages -join ', ')"
+        }
+
+        continue
+    }
+
     # What is up there already, so the put below can clear the older
     # versions of it first.
     #
@@ -644,13 +697,11 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
     # below, and a triplet has dozens of packages, so a run was doing
     # dozens of connects and disconnects where three will do.
     $upload_throttle = 3
-    $zips = @(gci $pkg_subdir_abs -filter '*.zip')
     $chunks = @()
-    if ($zips.count) {
-        $chunk_size = [math]::max(1, [math]::ceiling($zips.count / $upload_throttle))
-        for ($z = 0; $z -lt $zips.count; $z += $chunk_size) {
-            $chunks += ,@($zips[$z..([math]::min($z + $chunk_size - 1, $zips.count - 1))])
-        }
+    $chunk_size = [math]::max(1, [math]::ceiling($zips.count / $upload_throttle))
+
+    for ($z = 0; $z -lt $zips.count; $z += $chunk_size) {
+        $chunks += ,@($zips[$z..([math]::min($z + $chunk_size - 1, $zips.count - 1))])
     }
 
     $chunks | %{
