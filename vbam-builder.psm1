@@ -1197,6 +1197,60 @@ function refresh_host_tools([string[]]$triplets, [string]$host_triplet, [string]
     }
 }
 
+# What the tree has installed, and a stamp per package that moves whenever
+# vcpkg writes that package again: "<port>:<triplet>" -> stamp.
+#
+# vcpkg owns one <port>_<version>_<triplet>.list per installed package -- the
+# files it put in the tree -- and writes it afresh every time it installs that
+# package. A rebuild removes the package and installs it again, so the stamp
+# moves even where the version does not, which is the case a version comparison
+# cannot see: a port-version bump, or a dependency whose ABI moved, rebuilds a
+# port at the same version. Snapshot this before the builds, read it again
+# after, and the difference is what the run actually built.
+#
+# The info directory rather than the status database's Abi: field or the
+# per-port share/<port>/vcpkg_abi_info.txt. Either would be the more direct
+# answer and neither is there for every package -- of the 307 installed on this
+# builder 68 carry no Abi: and 32 have no vcpkg_abi_info.txt -- where every
+# installed package has a .list, that being how vcpkg knows what to delete.
+function installed_package_stamps([string]$vcpkg_root = '') {
+    if (-not $vcpkg_root) { $vcpkg_root = $env:VCPKG_ROOT }
+
+    $stamps = @{}
+    $info   = join-path $vcpkg_root 'installed/vcpkg/info'
+
+    if (-not (test-path $info)) { return $stamps }
+
+    foreach ($f in @(gci $info -filter '*.list' -file -ea ignore)) {
+        # Port names and triplets carry no underscore and a version can, so
+        # take the two ends and leave whatever is in the middle.
+        if ($f.Name -notmatch '^([^_]+)_.*_([^_]+)\.list$') { continue }
+
+        $stamps["$($matches[1]):$($matches[2])"] = [string]$f.LastWriteTimeUtc.Ticks
+    }
+
+    $stamps
+}
+
+# The packages $after has that $before did not, or has under a different stamp:
+# what the run built or rebuilt. A set rather than a list, the callers asking
+# about one package at a time.
+#
+# A package $before had and $after does not is left out on purpose. Something
+# removed and not put back has nothing to package, and the copy already
+# published is the last one that was real.
+function changed_packages([hashtable]$before, [hashtable]$after) {
+    $changed = @{}
+
+    foreach ($key in @($after.keys)) {
+        if ((-not $before) -or (-not $before.contains($key)) -or ($before[$key] -ne $after[$key])) {
+            $changed[$key] = $true
+        }
+    }
+
+    $changed
+}
+
 function get_host_triplet {
     $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
         'Arm64' { 'arm64' }
@@ -1250,6 +1304,7 @@ function task_action {
 }
 
 export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools,task_action,vcpkg_run, `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
+		              installed_package_stamps,changed_packages,task_action,vcpkg_run, `
 		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg

@@ -1283,4 +1283,99 @@ describe 'get_host_ports' {
     }
 }
 
+describe 'installed_package_stamps' {
+
+    beforeeach {
+        $script:tree = join-path $script:temp_dir "stamps-$(new-guid)"
+        $script:info = join-path $script:tree 'installed/vcpkg/info'
+        ni -itemtype directory $script:info -force | out-null
+    }
+
+    afterEach {
+        ri -r -fo $script:tree -ea ignore
+    }
+
+    # The name vcpkg gives the file, and the only thing the stamp is read off.
+    function script:touch_list([string]$name, [datetime]$when = (get-date)) {
+        $path = join-path $script:info $name
+        set-content -literalpath $path -value 'x'
+        (gi -literalpath $path).LastWriteTimeUtc = $when.ToUniversalTime()
+    }
+
+    it 'keys a package by port and triplet, leaving the version out' {
+        # The version is in the file name and deliberately not in the key: a
+        # port rebuilt at a new version is the same package to everything
+        # downstream, which wants to know that it moved, not what it moved to.
+        touch_list 'zlib_1.3.2_x64-windows.list'
+
+        @((installed_package_stamps $script:tree).keys) | should -be @('zlib:x64-windows')
+    }
+
+    it 'reads a version carrying an underscore of its own' {
+        # Port names and triplets have none, so the ends are what identify the
+        # package and the middle is whatever the version happens to be.
+        touch_list 'foo_1_2_3_x86-mingw-static.list'
+
+        @((installed_package_stamps $script:tree).keys) | should -be @('foo:x86-mingw-static')
+    }
+
+    it 'tells a rebuilt package from one left alone' {
+        touch_list 'zlib_1.3.2_x64-windows.list'   ([datetime]'2026-09-19T21:00:00Z')
+        touch_list 'bzip2_1.0.8_x64-windows.list'  ([datetime]'2026-09-19T21:00:00Z')
+
+        $before = installed_package_stamps $script:tree
+
+        # A rebuild at the same version: same file name, written again.
+        touch_list 'zlib_1.3.2_x64-windows.list'   ([datetime]'2026-09-20T21:00:00Z')
+
+        @(changed_packages $before (installed_package_stamps $script:tree)).keys |
+            should -be @('zlib:x64-windows')
+    }
+
+    it 'counts a package that was not there before as built' {
+        $before = installed_package_stamps $script:tree
+
+        touch_list 'lua_5.4.8_x64-windows.list'
+
+        @(changed_packages $before (installed_package_stamps $script:tree)).keys |
+            should -be @('lua:x64-windows')
+    }
+
+    it 'ignores anything that is not a .list' {
+        touch_list 'zlib_1.3.2_x64-windows.list'
+        set-content -literalpath (join-path $script:info 'zlib_1.3.2_x64-windows.list.aux') -value 'x'
+
+        @((installed_package_stamps $script:tree).keys) | should -be @('zlib:x64-windows')
+    }
+
+    it 'returns nothing for a tree with no installed directory' {
+        @((installed_package_stamps (join-path $script:temp_dir 'no-such-tree')).keys) | should -be @()
+    }
+}
+
+describe 'changed_packages' {
+
+    it 'leaves out a package that went away' {
+        # Removed and not put back: nothing to package, and what is published
+        # is the last copy that was real.
+        $before = @{ 'zlib:x64-windows' = '1'; 'lua:x64-windows' = '1' }
+        $after  = @{ 'zlib:x64-windows' = '1' }
+
+        @((changed_packages $before $after).keys) | should -be @()
+    }
+
+    it 'calls everything changed when there is no snapshot to compare' {
+        # Which is the safe way round: it packs too much rather than leaving a
+        # package unpublished because nothing knew whether it had moved.
+        @((changed_packages $null @{ 'zlib:x64-windows' = '1' }).keys) |
+            should -be @('zlib:x64-windows')
+    }
+
+    it 'says nothing changed when nothing did' {
+        $snap = @{ 'zlib:x64-windows' = '1'; 'lua:x64-windows' = '2' }
+
+        @((changed_packages $snap $snap).keys) | should -be @()
+    }
+}
+
 # vim:set sw=4 et:

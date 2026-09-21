@@ -252,6 +252,12 @@ pushd $stage_dir
 $pack_units         = [ordered]@{}
 # Toolkits refresh_host_tools has already run for.
 $host_tools_done    = @{}
+# Each toolkit's tree as it stood before this run built anything in it, and the
+# changed set derived from it at packing time. See installed_package_stamps.
+$stamps_before      = @{}
+$built_sets         = @{}
+# Packages left where they are because this run did not rebuild them.
+$unchanged_count    = 0
 $throttle           = [System.Environment]::ProcessorCount
 $binpkg_module      = $null
 # Ports whose packaging was skipped, filled in by the packing jobs below.
@@ -290,6 +296,11 @@ foreach ($triplet in $build_triplets) {
         # first is the one that has to get there ahead of the widening.
         if (-not $host_tools_done["$tk"]) {
             $host_tools_done["$tk"] = $true
+
+            # Taken before anything in this tree is built, the tooling refresh
+            # on the next line included: this is what the packing pass compares
+            # the finished tree against to see what the run produced.
+            $stamps_before["$tk"] = installed_package_stamps
 
             refresh_host_tools $build_triplets $host_t $tk
 
@@ -509,6 +520,44 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
 
     setup_build_env $unit_triplet $unit_tk
 
+    # Only what this run built.
+    #
+    # Everything installed for the pair used to be packed and put every night:
+    # dozens of packages re-zipped and re-uploaded to replace bytes identical
+    # to the ones already up there, and since each put clears that package's
+    # older versions first, a night that rebuilt one port still rewrote the
+    # whole remote directory. A package vcpkg did not write this run is already
+    # published by the run that did.
+    #
+    # -f/--force packs the lot regardless, which is what to reach for when the
+    # published set has drifted from the tree -- an upload that failed, a
+    # directory cleared by hand -- since nothing else puts an unchanged package
+    # back.
+    #
+    # A toolkit with no snapshot never went through the loop above, so there is
+    # nothing to say what it built: changed_packages calls the lot changed,
+    # which packs too much rather than publishing too little.
+    if (-not $force_build) {
+        if (-not $built_sets.contains("$unit_tk")) {
+            $built_sets["$unit_tk"] = changed_packages $stamps_before["$unit_tk"] (installed_package_stamps)
+        }
+
+        $built   = $built_sets["$unit_tk"]
+        $unbuilt = @($unit.Packages | ?{ -not $built.contains("${_}:$unit_triplet") })
+
+        if ($unbuilt) {
+            $unchanged_count += $unbuilt.count
+            "Unchanged since the last run, left published as they are for $unit_triplet$(if ($unit_tk) { " ($unit_tk)" }): $($unbuilt -join ', ')"
+        }
+
+        $unit.Packages = @($unit.Packages | ?{ $built.contains("${_}:$unit_triplet") })
+    }
+
+    if (-not $unit.Packages) {
+        "Nothing rebuilt for $unit_triplet$(if ($unit_tk) { " ($unit_tk)" }); nothing to pack."
+        continue
+    }
+
     $pkg_subdir = if ($unit_tk) { "$unit_triplet/$unit_tk" } else { $unit_triplet }
 
     ni -it dir $pkg_subdir -ea ignore | out-null
@@ -553,6 +602,11 @@ $upload_failures = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
 # The pairs that were packed are the pairs to upload: a directory with packages
 # in it is a directory to put.
 foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
+    # Emptied by the packing pass above where the run rebuilt nothing for this
+    # pair. There is no directory to put and nothing to replace, so do not open
+    # a session to find that out.
+    if (-not $unit.Packages) { continue }
+
     $triplet        = $unit.Triplet
     $tk             = $unit.Toolkit
     $pkg_subdir     = if ($tk) { "$triplet/$tk" } else { $triplet }
@@ -678,6 +732,10 @@ if ($pack_failures.count) {
 
 if ($upload_failures.count) {
     "WARNING: failed to upload: $((@($upload_failures) | sort-object -unique) -join ', ')"
+}
+
+if ($unchanged_count) {
+    "INFO: $unchanged_count package(s) this run did not rebuild were left published as they are; -f repacks and reuploads everything."
 }
 
 'INFO: vcpkg packages upgrade successful!'
