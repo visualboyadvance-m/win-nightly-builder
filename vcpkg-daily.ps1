@@ -163,7 +163,7 @@ if ('wxwidgets' -in $selected_port_names) {
 
     # Every builder runs this, so pick up whichever one got here first: the hash
     # check below then sees its commit and there is nothing left to do.
-    git pull --rebase --autostash
+    git_run pull --rebase --autostash
 
     if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
         set_content_lf wxwidgets/portfile.cmake `
@@ -183,7 +183,7 @@ if ('wxwidgets' -in $selected_port_names) {
                     $matches.4 } `
                 else { $_ }) })
 
-        git commit -a -m "wxwidgets: update master hash + bump ver" --signoff
+        git_run commit -a -m "wxwidgets: update master hash + bump ver" --signoff
 
         if ($lastexitcode -ne 0) {
             write-error 'failed to commit the wxwidgets port update in the overlay'
@@ -195,12 +195,12 @@ if ('wxwidgets' -in $selected_port_names) {
             $pushed = $false
 
             foreach ($try in 1..3) {
-                git push
+                git_run push
 
                 if ($lastexitcode -eq 0) { $pushed = $true; break }
 
                 "INFO: push rejected, rebasing onto the remote and retrying ($try)."
-                git pull --rebase --autostash
+                git_run pull --rebase --autostash
             }
 
             if (-not $pushed) {

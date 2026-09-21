@@ -175,6 +175,40 @@ function vcpkg_run {
     vcpkg @args
 }
 
+# Run git without letting a progress line abort the caller.
+#
+# The same shape as vcpkg_run above and the same reason. git reports what it
+# does on stderr -- "From github.com:..." on a fetch that brought something in,
+# "To github.com:..." and the ref update on every successful push -- Windows
+# PowerShell turns a native command's redirected stderr into an error record,
+# and the caller's erroractionpreference of stop makes the first one
+# terminating. The 2026-09-20 nightly died ten seconds in exactly there, on the
+# overlay pull, having built and published nothing: another builder had pushed
+# that day's ffmpeg commits, so for once the pull had something to say.
+#
+# Setting the preference is only half of it. At continue the record is not
+# terminating, but it is still a record, so the log gets six lines of
+# CategoryInfo and FullyQualifiedErrorId wrapped around one line of "From
+# github.com:microsoft/vcpkg" -- which is how the nightly fetch has looked
+# every run since 09-14. Piping 2>&1 through a string conversion flattens the
+# records back into the plain lines git wrote, so what git said is kept and
+# the framing around it goes.
+#
+# 2>$null would silence it just as well at continue, and --quiet would stop
+# git saying it at all, but both throw the fetch summary away with the noise,
+# and it is worth having in the log. Neither of those helps a caller left at
+# stop, either: the record is raised before the redirection discards it, which
+# is the trap the sftp upload in vcpkg-daily.ps1 documents. Only --quiet
+# escapes that, by leaving nothing on stderr to make a record from -- and this
+# function's own preference is what makes the difference here.
+#
+# $lastexitcode is what says whether git worked; the pipe does not disturb it.
+function git_run {
+    $erroractionpreference = 'continue'
+
+    git @args 2>&1 | %{ "$_" }
+}
+
 # The overlay repo, used on every platform.
 $OVERLAY_PORTS  = join-path $REPOS_ROOT vcpkg-overlay
 
@@ -644,6 +678,17 @@ function update_git_checkout {
     # Windows PowerShell turns a native command's redirected stderr into a
     # NativeCommandError that erroractionpreference stop makes terminating. See
     # vcpkg_run above. The exit status is what says whether git worked.
+    #
+    # Belt and braces now that the calls below go through git_run, which sets
+    # the same preference and flattens the record back into the line git wrote
+    # rather than leaving the log to wrap it in CategoryInfo. Left here for the
+    # git that gets added next without anyone thinking about stderr.
+    #
+    # The two exceptions are the rev-parse and the status below, whose output
+    # is read rather than logged. git_run merges stderr into what it returns,
+    # which is the last thing either wants: a stray warning would be taken for
+    # the branch name, and the [-1] on the rev-parse is there because that has
+    # happened.
     $erroractionpreference = 'continue'
 
     $lock = acquire_git_lock $path
@@ -659,7 +704,7 @@ function update_git_checkout {
 
 	    if ($parent -and -not (test-path $parent)) { ni -it dir $parent -force | out-null }
 
-	    git clone $origin $path
+	    git_run clone $origin $path
 
 	    if ($lastexitcode -ne 0) {
 		write-warning "cloning $origin into ${path}: git exited $lastexitcode"
@@ -679,11 +724,11 @@ function update_git_checkout {
 		    return
 		}
 
-		git init
-		git remote add origin $origin
-		git fetch --all --prune
-		git reset --hard origin/master
-		git branch --set-upstream-to=origin/master master
+		git_run init
+		git_run remote add origin $origin
+		git_run fetch --all --prune
+		git_run reset --hard origin/master
+		git_run branch --set-upstream-to=origin/master master
 	    }
 
 	    # Last line, so a stray warning from git cannot be mistaken for the branch.
@@ -699,8 +744,8 @@ function update_git_checkout {
 		return
 	    }
 
-	    git fetch --all --prune
-	    git pull --rebase
+	    git_run fetch --all --prune
+	    git_run pull --rebase
 
 	    if ($lastexitcode -ne 0) {
 		write-warning "Updating '$path' failed, git pull exited with $lastexitcode."
@@ -708,8 +753,8 @@ function update_git_checkout {
 	    }
 
 	    if ($submodules) {
-		git submodule update --init --recursive
-		git submodule update
+		git_run submodule update --init --recursive
+		git_run submodule update
 	    }
 	}
 	finally { popd }
@@ -1305,6 +1350,6 @@ function task_action {
 
 export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
-		              installed_package_stamps,changed_packages,task_action,vcpkg_run, `
+		              installed_package_stamps,changed_packages,task_action,vcpkg_run,git_run, `
 		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg
