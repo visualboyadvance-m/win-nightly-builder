@@ -1141,6 +1141,62 @@ function get_host_ports([string[]]$triplets, [string]$host_triplet,
     }
 }
 
+# The build tooling every triplet's ports declare as a host dependency --
+# ffmpeg-bin2c, pkgconf, the vcpkg-* script ports -- brought up to date on the
+# host triplet before any target pass can be the one that does it.
+#
+# Third in the series that upgrade_port in vcpkg-daily.ps1 and the sweep at the
+# foot of build-deps.ps1 begin. Those two keep a cross-triplet plan out of
+# `vcpkg upgrade`; this keeps one out of `vcpkg install`. A host tool going out
+# of date is enough to get there: ffmpeg-bin2c carries ffmpeg's own version, so
+# an ffmpeg bump moves it, and then the first `install --recurse` that wants an
+# ffmpeg has to rebuild the tool -- which means removing and rebuilding every
+# installed package that depends on it, across every triplet, in one plan.
+# `vcpkg remove --dry-run --recurse ffmpeg-bin2c:x64-windows` names them: every
+# ffmpeg there is.
+#
+# That plan then builds under whichever single environment the pass that
+# triggered it happened to have set. A windows triplet survives that, vcpkg
+# running vcvars for those itself, but a mingw triplet gets none: its
+# VCPKG_ENV_PASSTHROUGH is PATH alone, so the compiler is whatever the ambient
+# PATH holds. Reached from an MSVC pass, mingw.cmake's find_program for the
+# mingw gcc misses, CMake falls back to cl.exe without a word, and the link
+# dies on kernel32.lib because LIB is not passed through either. That is
+# ffmpeg:x86-mingw-static and ffmpeg:x64-mingw-static on 2026-09-19 -- and
+# since the rebuild removes before it builds, both were left uninstalled rather
+# than merely stale.
+#
+# Doing it here builds the tools and nothing else. The dependents their rebuild
+# displaces come out removed, with no compiler involved in removing them, and
+# each triplet's own pass reinstalls its own copy under its own environment,
+# which is the only place a mingw one can come out right.
+function refresh_host_tools([string[]]$triplets, [string]$host_triplet, [string]$toolkit) {
+    if (-not $host_triplet) { return }
+
+    # -Tools is "on the host and nowhere else", so the host triplet's own plan
+    # cannot answer it: every line of that plan is on the host, which would
+    # hand back the whole dep list and have this install the tree the pass
+    # below is about to install anyway. Ask about the triplets that are not it
+    # -- they are the ones whose packages carry a host dependency that can
+    # widen a plan -- and where the run has none, there is nothing to widen to.
+    $cross = @($triplets | ?{ "$_" -ne $host_triplet })
+
+    if (-not $cross) { return }
+
+    $tools = @(get_host_ports $cross $host_triplet -Tools)
+
+    if (-not $tools) { return }
+
+    "Refreshing the host tooling on $host_triplet$(if ($toolkit) { " ($toolkit)" }): $($tools -join ', ')"
+
+    setup_build_env $host_triplet $toolkit
+
+    foreach ($tool in $tools) {
+        vcpkg_run --triplet $host_triplet --host-triplet $host_triplet install `
+            --no-binarycaching --allow-unsupported --recurse --keep-going $tool
+    }
+}
+
 function get_host_triplet {
     $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
         'Arm64' { 'arm64' }
@@ -1194,6 +1250,6 @@ function task_action {
 }
 
 export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,task_action,vcpkg_run, `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools,task_action,vcpkg_run, `
 		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg

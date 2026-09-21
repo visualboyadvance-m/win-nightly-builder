@@ -10,9 +10,24 @@ $repo_path = join-path $REPOS_ROOT visualboyadvance-m
 update_git_checkout $repo_path -submodules `
     -origin git@github.com:visualboyadvance-m/visualboyadvance-m
 
+$host_tools_done = @{}
+
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
         setup_build_env $triplet $tk
+
+        # Once per toolkit, ahead of the installs below, for the reason
+        # refresh_host_tools gives: the `--recurse` on the install is what lets
+        # a stale host tool take every triplet's copy of its dependents with
+        # it, under this pass's single environment.
+        if (-not $host_tools_done["$tk"]) {
+            $host_tools_done["$tk"] = $true
+
+            refresh_host_tools $build_triplets (get_host_triplet) $tk
+
+            # refresh_host_tools leaves the environment on the host triplet.
+            setup_build_env $triplet $tk
+        }
 
         # An Android triplet takes the cross list; GTK and the X11/Wayland
         # Vulkan loader the host list carries do not build for it.

@@ -250,6 +250,8 @@ pushd $stage_dir
 # pack unit says both at once: a pair with packages in it is a pair with a
 # directory to put.
 $pack_units         = [ordered]@{}
+# Toolkits refresh_host_tools has already run for.
+$host_tools_done    = @{}
 $throttle           = [System.Environment]::ProcessorCount
 $binpkg_module      = $null
 # Ports whose packaging was skipped, filled in by the packing jobs below.
@@ -282,6 +284,18 @@ foreach ($triplet in $build_triplets) {
 
         if (-not $binpkg_module) { $binpkg_module = (get-module vcpkg-binpkg).path }
         $host_t = get_host_triplet
+
+        # Once per toolkit, before the first install of that toolkit's tree:
+        # the tooling is shared by every triplet in it, so whichever pass comes
+        # first is the one that has to get there ahead of the widening.
+        if (-not $host_tools_done["$tk"]) {
+            $host_tools_done["$tk"] = $true
+
+            refresh_host_tools $build_triplets $host_t $tk
+
+            # refresh_host_tools leaves the environment on the host triplet.
+            setup_build_env $triplet $tk
+        }
 
         $build_ports = @(selected_ports $triplet)
 
