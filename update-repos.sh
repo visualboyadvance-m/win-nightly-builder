@@ -1,6 +1,6 @@
 #!/bin/zsh
 
-emulate posix
+emulate sh 2>/dev/null
 
 if [ -z "$HOME" ]; then
     export HOME="/Users/$USER"
