@@ -1,0 +1,8 @@
+[Unit]
+Description=Run the VBAM Nightly (Android) daily at 23:00
+
+[Timer]
+OnCalendar=*-*-* 23:00:00
+
+[Install]
+WantedBy=timers.target

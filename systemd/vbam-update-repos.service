@@ -1,0 +1,13 @@
+[Unit]
+Description=VBAM Hourly Update Repos
+
+[Service]
+Type=oneshot
+# What the .sh wrappers set, plus the directories pwsh (/usr/local/sbin) and the
+# build tools live in, which the user manager's default PATH leaves out.
+Environment=LC_ALL=C TZ=UTC
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Appends to a log under ~/logs like the scheduled task and the .sh wrapper.
+# The shell creates ~/logs first: systemd would fail to open a StandardOutput=
+# file in a directory that does not exist yet.
+ExecStart=/bin/sh -c 'mkdir -p "$HOME/logs" && exec pwsh -nologo -noprofile "$HOME/source/repos/win-nightly-builder/update-repos.ps1" >> "$HOME/logs/update-repos.log" 2>&1'

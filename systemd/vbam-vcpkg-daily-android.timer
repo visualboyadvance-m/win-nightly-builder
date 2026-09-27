@@ -1,0 +1,8 @@
+[Unit]
+Description=Run the VBAM vcpkg Daily Upgrade (Android) daily at 21:00
+
+[Timer]
+OnCalendar=*-*-* 21:00:00
+
+[Install]
+WantedBy=timers.target

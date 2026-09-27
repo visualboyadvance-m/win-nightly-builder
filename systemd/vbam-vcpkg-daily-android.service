@@ -1,0 +1,18 @@
+[Unit]
+Description=VBAM vcpkg Daily Upgrade (Android)
+
+[Service]
+Type=oneshot
+# What the .sh wrappers set, plus the directories pwsh (/usr/local/sbin) and the
+# build tools live in, which the user manager's default PATH leaves out.
+Environment=LC_ALL=C TZ=UTC
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# ~/.bashrc sets these only for interactive shells, so a unit has to repeat
+# them. Keep ANDROID_NDK_HOME in step with the NDK ~/.bashrc names.
+Environment=ANDROID_HOME=%h/Android/Sdk ANDROID_SDK_ROOT=%h/Android/Sdk
+Environment=ANDROID_NDK_HOME=%h/Android/Sdk/ndk/30.0.15729638 ANDROID_NDK_ROOT=%h/Android/Sdk/ndk/30.0.15729638
+Environment=JAVA_HOME=/usr/lib/jvm/java-25-openjdk
+# Appends to a log under ~/logs like the scheduled task and the .sh wrapper.
+# The shell creates ~/logs first: systemd would fail to open a StandardOutput=
+# file in a directory that does not exist yet.
+ExecStart=/bin/sh -c 'mkdir -p "$HOME/logs" && exec pwsh -nologo -noprofile "$HOME/source/repos/win-nightly-builder/vcpkg-daily.ps1" --android >> "$HOME/logs/vcpkg-daily-android.log" 2>&1'

@@ -1,0 +1,8 @@
+[Unit]
+Description=Run the VBAM repo update hourly
+
+[Timer]
+OnCalendar=hourly
+
+[Install]
+WantedBy=timers.target
