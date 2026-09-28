@@ -1315,6 +1315,14 @@ function refresh_host_tools([string[]]$triplets, [string]$host_triplet, [string]
 # Copy them out under the date instead, which is what makes the log directory
 # cumulative rather than a window one run deep.
 function archive_build_logs([string]$port, [string]$triplet, [string]$toolkit = '') {
+    # Nothing here may take the run down. It is called from the failure path,
+    # which is the worst place to turn one problem into two, and it did: the
+    # 09-28 nightly died at the first build it went to report, because $ROOT
+    # is empty on the builder -- where the logs live at /logs -- and join-path
+    # refuses an empty component. The paths below are built by interpolation
+    # for that reason, the way task_action builds the log path it redirects to.
+    $erroractionpreference = 'continue'
+
     $src = join-path $env:VCPKG_ROOT "buildtrees/$port"
 
     if (-not (test-path $src)) { return }
@@ -1328,14 +1336,19 @@ function archive_build_logs([string]$port, [string]$triplet, [string]$toolkit = 
 
     if (-not $logs) { return }
 
-    $dest = join-path $ROOT ("logs/build-failures/" + (get-date -format 'yyyy-MM-dd') +
-                             "/$port-$triplet" + $(if ($toolkit) { "-$toolkit" }))
+    $dest = "$ROOT/logs/build-failures/$(get-date -format 'yyyy-MM-dd')/$port-$triplet" +
+            $(if ($toolkit) { "-$toolkit" })
 
-    ni -it dir $dest -force -ea ignore | out-null
+    try {
+        ni -it dir $dest -force -ea ignore | out-null
 
-    $logs | %{ copy-item -literalpath $_.FullName -destination $dest -force -ea ignore }
+        $logs | %{ copy-item -literalpath $_.FullName -destination $dest -force -ea ignore }
 
-    "Kept $($logs.count) build log(s) for ${port}:$triplet under $dest"
+        "Kept $($logs.count) build log(s) for ${port}:$triplet under $dest"
+    }
+    catch {
+        write-warning "could not keep the build logs for ${port}:${triplet}: $($_.exception.message)"
+    }
 }
 
 # The names and modification times sftp reports for a directory, as

@@ -144,22 +144,68 @@ function set_content_lf([string]$path, [string[]]$lines) {
     [io.file]::WriteAllText((convert-path $path), (($lines -join "`n") + "`n"))
 }
 
+# Replace the value in a `set(NAME value)` line, leaving the spacing that lines
+# the values up alone. By name, so the order the pins sit in does not matter and
+# nothing here has to count lines in the portfile.
+function set_cmake_var([string[]]$lines, [string]$name, [string]$value) {
+    @($lines | %{
+        $_ -replace ('^(\s*set\(' + [regex]::escape($name) + '\s+)\S+(\).*)$'),
+                    ('${1}' + $value + '${2}')
+    })
+}
+
+# The commit a wxWidgets commit records for one of its submodules.
+#
+# The submodule is a gitlink, so the source archive has an empty directory
+# where it should be and the commit lives only in the tree. ls-remote cannot
+# read a tree, so this asks the API, which answers for a public repository
+# without a token.
+function wx_submodule_sha([string]$wx_sha, [string]$path) {
+    $url = "https://api.github.com/repos/wxWidgets/wxWidgets/contents/$path" + "?ref=$wx_sha"
+
+    try {
+        $info = (iwr -usebasicparsing $url).content | convertfrom-json
+    }
+    catch {
+        write-warning "could not read $path at ${wx_sha}: $($_.exception.message)"
+        return $null
+    }
+
+    if ($info.type -ne 'submodule' -or $info.sha -notmatch '^[0-9a-f]{40}$') {
+        write-warning "$path at $wx_sha is not a submodule pointer"
+        return $null
+    }
+
+    $info.sha
+}
+
 if ('wxwidgets' -in $selected_port_names) {
-    $temp_dir    = "$env:TEMP/wx-port-temp"
-    $wx_tarball  = "$temp_dir/master.tar.gz"
+    # Which commit master is at, rather than what master.tar.gz happens to
+    # contain.
+    #
+    # The archive of a branch is regenerated for whatever that branch points
+    # at when it is asked for, so a SHA512 taken here was only true until the
+    # next commit landed upstream -- and the port is not built until hours
+    # later. On 2026-09-28 master moved in between and every triplet failed on
+    # "download had an unexpected hash" before a single file was compiled. The
+    # archive of a commit is the same bytes every time, so pinning the port to
+    # one makes the pair it records stay true.
+    #
+    # lexilla and scintilla are pinned with it, to the commits wxWidgets itself
+    # records for them, so a pin left a few days behind master is still a set
+    # that goes together -- rather than an old wxWidgets built against whatever
+    # those two branches reached today, which is a combination nobody has built.
+    #
+    # ls-remote rather than the API for master: no token, no rate limit, and
+    # git is already here. --heads keeps a tag of the same name out of it.
+    $wx_sha = @(git_run ls-remote --heads https://github.com/wxWidgets/wxWidgets.git master |
+                %{ ($_ -split '\s+')[0] } | ?{ $_ -match '^[0-9a-f]{40}$' })
 
-    ni -it dir $temp_dir -ea ignore | out-null
+    if ($lastexitcode -ne 0 -or -not $wx_sha) {
+        write-error "could not resolve the wxWidgets master commit; leaving the port alone"
+    }
 
-    # Not curl: Windows PowerShell aliases that to invoke-webrequest, which has
-    # no -LO, so this line died on a parameter it never saw the moment the
-    # scheduled tasks moved off pwsh. invoke-webrequest is the one spelling both
-    # shells agree on. Write to an absolute path rather than pushd'ing, since
-    # -outfile resolves against the process directory, not the PowerShell one.
-    iwr -usebasicparsing https://github.com/wxWidgets/wxWidgets/archive/master.tar.gz -outfile $wx_tarball
-
-    $new_wx_hash = (get-filehash -a sha512 $wx_tarball).hash.tolower()
-
-    ri -r -fo $temp_dir
+    $wx_sha = $wx_sha[0]
 
     $overlay_dir = $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS })
 
@@ -176,12 +222,68 @@ if ('wxwidgets' -in $selected_port_names) {
     # check below then sees its commit and there is nothing left to do.
     git_run pull --rebase --autostash
 
-    if (-not ((gc wxwidgets/portfile.cmake) -match $new_wx_hash)) {
-        set_content_lf wxwidgets/portfile.cmake `
-            @(gc wxwidgets/portfile.cmake | %{ $_ -replace 'SHA512 .*',"SHA512 $new_wx_hash" })
+    if (-not ((gc wxwidgets/portfile.cmake) -match ("set\(WX_REF\s+" + $wx_sha))) {
+        # Downloaded only once there is something to record. Most nights
+        # another builder has already pushed this commit, or master has not
+        # moved at all, and neither wants twenty megabytes fetched to find out.
+        # All three or none. Moving wxWidgets and leaving the submodules where
+        # they were is the mismatch this pinning exists to stop, so a submodule
+        # that cannot be resolved abandons the update and leaves the port at the
+        # consistent set it already had.
+        $lexilla_sha   = wx_submodule_sha $wx_sha 'src/stc/lexilla'
+        $scintilla_sha = wx_submodule_sha $wx_sha 'src/stc/scintilla'
 
+        if (-not $lexilla_sha -or -not $scintilla_sha) {
+            write-warning 'leaving the wxwidgets port at its current pins'
+        }
+        else {
+
+        $temp_dir = "$env:TEMP/wx-port-temp"
+
+        ni -it dir $temp_dir -ea ignore | out-null
+
+        # Not curl: Windows PowerShell aliases that to invoke-webrequest, which
+        # has no -LO, so this died on a parameter it never saw the moment the
+        # scheduled tasks moved off pwsh. invoke-webrequest is the one spelling
+        # both shells agree on. Absolute paths, since -outfile resolves against
+        # the process directory and not the PowerShell one.
+        function fetch_sha512([string]$url, [string]$into) {
+            iwr -usebasicparsing $url -outfile $into
+
+            (get-filehash -a sha512 $into).hash.tolower()
+        }
+
+        $new_wx_hash = fetch_sha512 `
+            "https://github.com/wxWidgets/wxWidgets/archive/$wx_sha.tar.gz" "$temp_dir/wx.tar.gz"
+        $new_lexilla_hash = fetch_sha512 `
+            "https://github.com/wxWidgets/lexilla/archive/$lexilla_sha.tar.gz" "$temp_dir/lexilla.tar.gz"
+        $new_scintilla_hash = fetch_sha512 `
+            "https://github.com/wxWidgets/scintilla/archive/$scintilla_sha.tar.gz" "$temp_dir/scintilla.tar.gz"
+
+        ri -r -fo $temp_dir
+
+        # Six values rewritten together: a commit says which source and a hash
+        # says the bytes it arrives as, and any one of them out of step with
+        # the rest is a port that cannot build.
+        $wx_portfile = @(gc wxwidgets/portfile.cmake)
+
+        foreach ($pin in @(
+            @{ Name = 'WX_REF';           Value = $wx_sha },
+            @{ Name = 'WX_SHA512';        Value = $new_wx_hash },
+            @{ Name = 'LEXILLA_REF';      Value = $lexilla_sha },
+            @{ Name = 'LEXILLA_SHA512';   Value = $new_lexilla_hash },
+            @{ Name = 'SCINTILLA_REF';    Value = $scintilla_sha },
+            @{ Name = 'SCINTILLA_SHA512'; Value = $new_scintilla_hash })) {
+
+            $wx_portfile = set_cmake_var $wx_portfile $pin.Name $pin.Value
+        }
+
+        set_content_lf wxwidgets/portfile.cmake $wx_portfile
+
+        # Read at the pinned commit, not at master, or the version recorded
+        # here can be one from a commit the port does not build.
         $wx_master_ver = (
-            iwr -usebasicparsing https://raw.githubusercontent.com/wxWidgets/wxWidgets/refs/heads/master/include/wx/version.h | % content |
+            iwr -usebasicparsing "https://raw.githubusercontent.com/wxWidgets/wxWidgets/$wx_sha/include/wx/version.h" | % content |
             sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
         ).matches.groups[1].value
 
@@ -194,7 +296,7 @@ if ('wxwidgets' -in $selected_port_names) {
                     $matches.4 } `
                 else { $_ }) })
 
-        git_run commit -a -m "wxwidgets: update master hash + bump ver" --signoff
+        git_run commit -a -m "wxwidgets: update master commit + bump ver" --signoff
 
         if ($lastexitcode -ne 0) {
             write-error 'failed to commit the wxwidgets port update in the overlay'
@@ -217,6 +319,7 @@ if ('wxwidgets' -in $selected_port_names) {
             if (-not $pushed) {
                 write-error 'failed to push the wxwidgets port update to the overlay'
             }
+        }
         }
     }
 

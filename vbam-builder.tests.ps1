@@ -1452,6 +1452,50 @@ describe 'package_needs_publishing' {
     }
 }
 
+describe 'archive_build_logs' {
+
+    it 'survives the empty $ROOT the builder actually has' {
+        # $ROOT is "" on win_builder, where the logs live at /logs, and the
+        # first version of this reached for join-path, which refuses an empty
+        # component. That killed the 09-28 nightly at the first build it went
+        # to report -- on the failure path, where turning one problem into two
+        # is worst. The earlier test overrode $ROOT with a temp directory and
+        # so never saw it.
+        $vbam = get-module vbam-builder
+        $saved = & $vbam { $script:ROOT }
+
+        # A buildtree of its own, under a port name nothing can collide with.
+        $port = 'zz-archive-regression-test'
+        $fake = join-path $script:temp_dir "vcpkgroot-$([guid]::NewGuid())"
+        $bt   = join-path $fake "buildtrees/$port"
+        ni -itemtype directory $bt -force | out-null
+        'log' | set-content (join-path $bt 'install-x64-windows-dbg-out.log')
+
+        $saved_vcpkg = $env:VCPKG_ROOT
+        $env:VCPKG_ROOT = $fake
+
+        try {
+            & $vbam { $script:ROOT = '' }
+
+            { archive_build_logs $port 'x64-windows' } | should -not -throw
+        }
+        finally {
+            & $vbam { $script:ROOT = $args[0] } $saved
+            $env:VCPKG_ROOT = $saved_vcpkg
+            ri -r -fo $fake -ea ignore
+            ri -r -fo "/logs/build-failures/$(get-date -format 'yyyy-MM-dd')/$port-x64-windows" -ea ignore
+        }
+    }
+
+    it 'does not throw for a port with no buildtree' {
+        $saved_vcpkg = $env:VCPKG_ROOT
+        $env:VCPKG_ROOT = $script:temp_dir
+
+        try   { { archive_build_logs 'nosuchport' 'x64-windows' } | should -not -throw }
+        finally { $env:VCPKG_ROOT = $saved_vcpkg }
+    }
+}
+
 describe 'acquire_git_lock kinds' {
 
     beforeeach {
