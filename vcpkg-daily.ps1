@@ -280,11 +280,10 @@ pushd $stage_dir
 $pack_units         = [ordered]@{}
 # Toolkits refresh_host_tools has already run for.
 $host_tools_done    = @{}
-# Each toolkit's tree as it stood before this run built anything in it, and the
-# changed set derived from it at packing time. See installed_package_stamps.
-$stamps_before      = @{}
-$built_sets         = @{}
-# Packages left where they are because this run did not rebuild them.
+# When each toolkit's tree last had every package written, read once at packing
+# time and compared against the server. See installed_package_stamps.
+$stamps             = @{}
+# Packages the server already has the current build of.
 $unchanged_count    = 0
 $throttle           = [System.Environment]::ProcessorCount
 $binpkg_module      = $null
@@ -312,6 +311,31 @@ function add_pack_unit([string]$triplet, [string]$toolkit, [string[]]$packages) 
     $unit.Packages = @(@($unit.Packages) + @($packages) | select-object -unique)
 }
 
+# Held for as long as this run is building, so update-repos leaves the ports
+# tree alone while it does.
+#
+# That task pulls every checkout hourly, and a pull landing mid-run moves the
+# ports underneath the build: the host tools live in this tree, so one going
+# out of date at 22:00 is one refresh_host_tools looked at and passed at 21:00,
+# and the next install that wants it drags every dependent across every triplet
+# into a single plan under whichever environment that pass has. update-repos
+# asks for this lock without waiting and skips the checkout when a run has it.
+#
+# Only the vcpkg checkout. The overlay is pulled hourly too and moving it
+# mid-run is its own kind of wrong -- half the triplets built against one
+# version of a port and half against the next -- but it holds no host tools, so
+# it cannot produce the cross-triplet plan this is about.
+#
+# Released after the packing pass below. Not in a finally: Windows closes an
+# exclusively opened file when the process holding it goes, so a run that dies
+# releases it on the way out, which is the case that matters.
+$vcpkg_tree      = join-path $REPOS_ROOT vcpkg
+$vcpkg_tree_lock = acquire_git_lock $vcpkg_tree -timeout_seconds 300 -kind 'inuse'
+
+if (-not $vcpkg_tree_lock) {
+    write-warning "could not take the in-use lock on $vcpkg_tree; update-repos may move the ports tree under this run"
+}
+
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
         setup_build_env $triplet $tk
@@ -324,11 +348,6 @@ foreach ($triplet in $build_triplets) {
         # first is the one that has to get there ahead of the widening.
         if (-not $host_tools_done["$tk"]) {
             $host_tools_done["$tk"] = $true
-
-            # Taken before anything in this tree is built, the tooling refresh
-            # on the next line included: this is what the packing pass compares
-            # the finished tree against to see what the run produced.
-            $stamps_before["$tk"] = installed_package_stamps
 
             refresh_host_tools $build_triplets $host_t $tk
 
@@ -414,6 +433,9 @@ foreach ($triplet in $build_triplets) {
         foreach ($missing in @($build_port_names | ?{ $_ -notin $installed_names })) {
             $build_failures += "${missing}:$triplet$(if ($tk) { " ($tk)" })"
             write-warning "${missing}:$triplet did not build, nothing to package"
+
+            # Before the next run builds that pair and writes over them.
+            archive_build_logs $missing "$triplet" $tk
         }
 
         add_pack_unit "$triplet" $tk @($installed_names | ?{ -not $packages -or $_ -in $build_port_names })
@@ -521,6 +543,8 @@ foreach ($triplet in $build_triplets) {
                 foreach ($missing in @($host_port_names | ?{ $_ -notin $th_installed })) {
                     $build_failures += "${missing}:$target_host_t$(if ($tk) { " ($tk)" })"
                     write-warning "${missing}:$target_host_t did not build, nothing to package"
+
+                    archive_build_logs $missing "$target_host_t" $tk
                 }
 
                 add_pack_unit $target_host_t $tk @($th_installed | ?{ $_ -in $host_port_names })
@@ -548,37 +572,64 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
 
     setup_build_env $unit_triplet $unit_tk
 
-    # Only what this run built.
+    # Only what the server does not already have.
     #
     # Everything installed for the pair used to be packed and put every night:
     # dozens of packages re-zipped and re-uploaded to replace bytes identical
     # to the ones already up there, and since each put clears that package's
     # older versions first, a night that rebuilt one port still rewrote the
-    # whole remote directory. A package vcpkg did not write this run is already
-    # published by the run that did.
+    # whole remote directory.
     #
-    # -f/--force packs the lot regardless, which is what to reach for when the
-    # published set has drifted from the tree -- an upload that failed, a
-    # directory cleared by hand -- since nothing else puts an unchanged package
-    # back.
+    # The first cut at this compared the tree against a snapshot taken at the
+    # start of the run, which answers "did this run build it" and not "is what
+    # is published still the current build". Those differ every time a run does
+    # not finish: the 09-25 and 09-27 nightlies were both killed mid-build by
+    # the machine going down, and what they had built by then was installed,
+    # never uploaded, and invisible to every run after -- the next snapshot
+    # already contained it.
     #
-    # A toolkit with no snapshot never went through the loop above, so there is
-    # nothing to say what it built: changed_packages calls the lot changed,
-    # which packs too much rather than publishing too little.
+    # Ask the server instead. A package wants publishing when the directory has
+    # no copy of it, or when the copy up there was put before the build now
+    # installed here. That is the same answer for the ordinary case and the
+    # right one for the rest: an upload that failed, a run that died before it
+    # got there, a directory cleared by hand. It is self-healing rather than
+    # something -f has to be remembered for.
+    #
+    # Fetched whatever -f says, and kept on the unit: -f skips the comparison
+    # below but not the listing, because the upload pass clears a package's
+    # older versions before putting the new one and wants these same names to
+    # do it. Reusing it there is also what keeps this to one connection a pair
+    # rather than two.
+    $remote = remote_package_listing "vcpkg/$(if ($unit_tk) { "$unit_triplet/$unit_tk" } else { $unit_triplet })"
+
+    $unit | add-member -notepropertyname Remote -notepropertyvalue $remote -force
+
     if (-not $force_build) {
-        if (-not $built_sets.contains("$unit_tk")) {
-            $built_sets["$unit_tk"] = changed_packages $stamps_before["$unit_tk"] (installed_package_stamps)
+        if (-not $stamps.contains("$unit_tk")) { $stamps["$unit_tk"] = installed_package_stamps }
+
+        $built  = $stamps["$unit_tk"]
+        $stale  = @()
+        $fresh  = @()
+
+        foreach ($pkg in @($unit.Packages)) {
+            $key = "${pkg}:$unit_triplet"
+
+            # No stamp means vcpkg has no record of installing it, which the
+            # packing below would fail on anyway. Leave it in and let that
+            # report it rather than quietly dropping it here.
+            $when = if ($built.contains($key)) {
+                        [datetime]::new([long]$built[$key], [datetimekind]::Utc).ToLocalTime()
+                    } else { get-date }
+
+            if (package_needs_publishing $remote $pkg $when) { $fresh += $pkg } else { $stale += $pkg }
         }
 
-        $built   = $built_sets["$unit_tk"]
-        $unbuilt = @($unit.Packages | ?{ -not $built.contains("${_}:$unit_triplet") })
-
-        if ($unbuilt) {
-            $unchanged_count += $unbuilt.count
-            "Unchanged since the last run, left published as they are for $unit_triplet$(if ($unit_tk) { " ($unit_tk)" }): $($unbuilt -join ', ')"
+        if ($stale) {
+            $unchanged_count += $stale.count
+            "Already published and unchanged for $unit_triplet$(if ($unit_tk) { " ($unit_tk)" }): $($stale -join ', ')"
         }
 
-        $unit.Packages = @($unit.Packages | ?{ $built.contains("${_}:$unit_triplet") })
+        $unit.Packages = @($fresh)
     }
 
     if (-not $unit.Packages) {
@@ -623,6 +674,11 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
 }
 
 teardown_build_env
+
+# The builds are done and the packages are made, so the ports tree is nobody's
+# business now: let the hourly update have it back before the uploads, which
+# take a while and do not touch it.
+release_git_lock $vcpkg_tree_lock
 
 # Packages sftp could not put, filled in by the upload jobs below.
 $upload_failures = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
@@ -685,13 +741,18 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
     # so saying hello would abort the upload pass. The 2>$null does not
     # avoid that on its own -- the record is raised before it is discarded
     # -- it only keeps the banner out of the names below.
-    $existing_pkgs = & {
-        $erroractionpreference = 'continue'
+    # The names the packing pass read off the server, so the put below can
+    # clear the older versions of each first.
+    #
+    # parse_sftp_listing matches package names out of the listing rather than
+    # skipping a fixed number of header lines, which is what the counting it
+    # replaced got wrong: sftp writes two header lines with stderr discarded
+    # and not three, so skipping three ate the alphabetically first package in
+    # every directory. That one never looked present, never had its older
+    # versions removed, and x64-linux collected two alsa packages that way --
+    # a consumer offered a choice of two took neither.
+    $existing_pkgs = @($unit.Remote.Keys)
 
-        @('ls -1' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null | %{
-            if ($_ -match '^\s*([^_\s]+)_[^_\s]+_[^_\s]+\.zip\s*$') { $matches[1] }
-        }) | select-object -unique
-    }
     # One sftp session per chunk of packages rather than one per package.
     # Every connection is another chance at the teardown bug handled
     # below, and a triplet has dozens of packages, so a run was doing

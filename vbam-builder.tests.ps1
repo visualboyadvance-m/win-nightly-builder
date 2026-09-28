@@ -924,7 +924,11 @@ describe 'get-triplets' {
             (get-triplets @a).Toolkits | should -be @('')
         }
 
-        it 'takes --toolkit alone to mean the triplets that toolkit is for' {
+        # -skip off Windows: with no triplet named, get-triplets falls back to
+        # the platform's default list, and only the Windows one has triplets a
+        # toolkit applies to. On Linux and macOS these select nothing, so two
+        # of them failed and the third passed for saying nothing.
+        it 'takes --toolkit alone to mean the triplets that toolkit is for' -skip:(-not $IsWindows) {
             # Not "every default triplet, built with v143": the mingw and
             # arm64 ones have no v143 to select.
             $a = @('--toolkit', 'v143')
@@ -933,13 +937,13 @@ describe 'get-triplets' {
             )
         }
 
-        it 'gives each of those only the named toolkit' {
+        it 'gives each of those only the named toolkit' -skip:(-not $IsWindows) {
             $a = @('--toolkit', 'v143')
             $out = get-triplets @a
             @($out | %{ $_.Toolkits }) | should -be @('v143', 'v143', 'v143', 'v143')
         }
 
-        it 'leaves no mingw or arm64 triplet in a --toolkit-only selection' {
+        it 'leaves no mingw or arm64 triplet in a --toolkit-only selection' -skip:(-not $IsWindows) {
             $a = @('--toolkit', 'v143')
             @(get-triplets @a | %{ "$_" }) | should -not -contain 'x86-mingw-static'
             @(get-triplets @a | %{ "$_" }) | should -not -contain 'arm64-windows-static'
@@ -1286,7 +1290,7 @@ describe 'get_host_ports' {
 describe 'installed_package_stamps' {
 
     beforeeach {
-        $script:tree = join-path $script:temp_dir "stamps-$(new-guid)"
+        $script:tree = join-path $script:temp_dir "stamps-$([guid]::NewGuid())"
         $script:info = join-path $script:tree 'installed/vcpkg/info'
         ni -itemtype directory $script:info -force | out-null
     }
@@ -1319,26 +1323,17 @@ describe 'installed_package_stamps' {
         @((installed_package_stamps $script:tree).keys) | should -be @('foo:x86-mingw-static')
     }
 
-    it 'tells a rebuilt package from one left alone' {
-        touch_list 'zlib_1.3.2_x64-windows.list'   ([datetime]'2026-09-19T21:00:00Z')
-        touch_list 'bzip2_1.0.8_x64-windows.list'  ([datetime]'2026-09-19T21:00:00Z')
+    it 'moves the stamp when a package is rebuilt at the same version' {
+        # Which is the case a version comparison cannot see: a port-version
+        # bump, or a dependency whose ABI moved, rebuilds a port at the same
+        # version and so under the same file name.
+        touch_list 'zlib_1.3.2_x64-windows.list' ([datetime]'2026-09-19T21:00:00Z')
+        $before = (installed_package_stamps $script:tree)['zlib:x64-windows']
 
-        $before = installed_package_stamps $script:tree
+        touch_list 'zlib_1.3.2_x64-windows.list' ([datetime]'2026-09-20T21:00:00Z')
+        $after = (installed_package_stamps $script:tree)['zlib:x64-windows']
 
-        # A rebuild at the same version: same file name, written again.
-        touch_list 'zlib_1.3.2_x64-windows.list'   ([datetime]'2026-09-20T21:00:00Z')
-
-        @(changed_packages $before (installed_package_stamps $script:tree)).keys |
-            should -be @('zlib:x64-windows')
-    }
-
-    it 'counts a package that was not there before as built' {
-        $before = installed_package_stamps $script:tree
-
-        touch_list 'lua_5.4.8_x64-windows.list'
-
-        @(changed_packages $before (installed_package_stamps $script:tree)).keys |
-            should -be @('lua:x64-windows')
+        $after | should -not -be $before
     }
 
     it 'ignores anything that is not a .list' {
@@ -1353,28 +1348,182 @@ describe 'installed_package_stamps' {
     }
 }
 
-describe 'changed_packages' {
+describe 'parse_sftp_listing' {
 
-    it 'leaves out a package that went away' {
-        # Removed and not put back: nothing to package, and what is published
-        # is the last copy that was real.
-        $before = @{ 'zlib:x64-windows' = '1'; 'lua:x64-windows' = '1' }
-        $after  = @{ 'zlib:x64-windows' = '1' }
+    it 'reads the name and time of each package' {
+        $l = parse_sftp_listing @(
+            '-rw-rw-r--    1 1001     1001     12345678 Sep 21 14:25 ffmpeg_9.0.2_x64-windows.zip'
+        ) ([datetime]'2026-09-28T10:00:00')
 
-        @((changed_packages $before $after).keys) | should -be @()
+        $l['ffmpeg'] | should -be ([datetime]'2026-09-21T14:25:00')
     }
 
-    it 'calls everything changed when there is no snapshot to compare' {
-        # Which is the safe way round: it packs too much rather than leaving a
-        # package unpublished because nothing knew whether it had moved.
-        @((changed_packages $null @{ 'zlib:x64-windows' = '1' }).keys) |
-            should -be @('zlib:x64-windows')
+    it 'reads the shape the nightly server actually sends' {
+        # It masks the permission bits and does not report a link count, so
+        # the mode is taken as ten characters of anything and only its first
+        # one, the directory flag, is read. Synthetic listings with tidy
+        # "-rw-rw-r--" modes and numeric link counts all parsed happily while
+        # every real line was dropped.
+        $l = parse_sftp_listing @(
+            'Changing to: /nightly.visualboyadvance-m.org/vcpkg/x64-windows'
+            'sftp> ls -l'
+            '-rw-******    ? 1016     1016      2610458 Sep 21 23:34 brotli_1.2.0_x64-windows.zip'
+            '-rw-******    ? 1016     1016        11393 Mar 20  2026 dirent_1.26_x64-windows.zip'
+            'drwx------    ? 1016     1016         4096 Sep 21 23:34 v143'
+        ) ([datetime]'2026-09-28T10:00:00')
+
+        @($l.keys | sort-object) | should -be @('brotli', 'dirent')
+        $l['brotli'] | should -be ([datetime]'2026-09-21T23:34:00')
     }
 
-    it 'says nothing changed when nothing did' {
-        $snap = @{ 'zlib:x64-windows' = '1'; 'lua:x64-windows' = '2' }
+    it 'skips the banner, directories and anything not a package' {
+        # sftp greets on stderr and echoes the prompt, and a toolkit
+        # subdirectory sits in the same listing as the packages.
+        $l = parse_sftp_listing @(
+            'Connected to nightly.visualboyadvance-m.org.'
+            'sftp> ls -l'
+            'drwxrwxr-x    2 1001     1001         4096 Sep 21 14:25 v143'
+            '-rw-rw-r--    1 1001     1001         4096 Sep 21 14:25 notapackage.txt'
+            '-rw-rw-r--    1 1001     1001     12345678 Sep 21 14:25 lua_5.4.8_x64-windows.zip'
+        ) ([datetime]'2026-09-28T10:00:00')
 
-        @((changed_packages $snap $snap).keys) | should -be @()
+        @($l.keys) | should -be @('lua')
+    }
+
+    it 'takes the year from a listing old enough to carry one' {
+        $l = parse_sftp_listing @(
+            '-rw-rw-r--    1 1001     1001       345678 Dec 30  2025 zlib_1.3.2_x64-windows.zip'
+        ) ([datetime]'2026-09-28T10:00:00')
+
+        $l['zlib'] | should -be ([datetime]'2025-12-30T00:00:00')
+    }
+
+    it 'puts a recent month that has not happened yet in the previous year' {
+        # No year in the listing under six months old, so December read in
+        # September is last December, not one three months away.
+        $l = parse_sftp_listing @(
+            '-rw-rw-r--    1 1001     1001       345678 Dec 30 11:00 zlib_1.3.2_x64-windows.zip'
+        ) ([datetime]'2026-09-28T10:00:00')
+
+        $l['zlib'].Year | should -be 2025
+    }
+
+    it 'leaves out an entry whose date it cannot read' {
+        # A month name from some other locale, say. Left out here reads
+        # downstream as "no idea when", which republishes -- the safe way.
+        $l = parse_sftp_listing @(
+            '-rw-rw-r--    1 1001     1001       345678 Mmm 30 11:00 zlib_1.3.2_x64-windows.zip'
+        ) ([datetime]'2026-09-28T10:00:00')
+
+        @($l.keys) | should -be @()
+    }
+}
+
+describe 'package_needs_publishing' {
+
+    it 'leaves a package the server has a later copy of' {
+        package_needs_publishing @{ 'ffmpeg' = [datetime]'2026-09-21T14:25:00' } 'ffmpeg' ([datetime]'2026-09-20T09:00:00') |
+            should -be $false
+    }
+
+    it 'publishes one built since the copy up there was put' {
+        package_needs_publishing @{ 'ffmpeg' = [datetime]'2026-09-21T14:25:00' } 'ffmpeg' ([datetime]'2026-09-28T09:00:00') |
+            should -be $true
+    }
+
+    it 'publishes one the server does not have at all' {
+        # The self-healing case: an upload that failed, or a run that died
+        # before it got there.
+        package_needs_publishing @{ 'ffmpeg' = [datetime]'2026-09-21T14:25:00' } 'lua' ([datetime]'2026-09-20T09:00:00') |
+            should -be $true
+    }
+
+    it 'publishes everything when the listing is empty' {
+        # An empty, missing or unreadable directory all arrive as no listing.
+        package_needs_publishing @{} 'ffmpeg' ([datetime]'2026-09-20T09:00:00') |
+            should -be $true
+    }
+
+    it 'does not republish over the minute sftp rounds away' {
+        # The listing carries no seconds, so a copy put in the same minute as
+        # the build reads as older than it.
+        package_needs_publishing @{ 'lua' = [datetime]'2026-09-28T09:30:00' } 'lua' `
+            ([datetime]'2026-09-28T09:30:40') | should -be $false
+    }
+}
+
+describe 'acquire_git_lock kinds' {
+
+    beforeeach {
+        $script:lock_tree = join-path $script:temp_dir "locktree-$([guid]::NewGuid())"
+        ni -itemtype directory $script:lock_tree -force | out-null
+    }
+
+    afterEach {
+        ri -r -fo $script:lock_tree -ea ignore
+    }
+
+    it 'refuses a second holder of the same kind' {
+        # The file is opened with no sharing, so this holds within one process
+        # as well as across two, which is what makes it testable here.
+        $first = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $first | should -not -be $null
+
+        acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse' | should -be $null
+
+        release_git_lock $first
+    }
+
+    it 'lets the two kinds be held at once' {
+        # The point of having two. A run holds "inuse" for hours, and its own
+        # update_vcpkg takes "git" for each pull it makes inside that; one lock
+        # for both would have the run waiting on itself.
+        $inuse = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $git   = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'git'
+
+        $inuse | should -not -be $null
+        $git   | should -not -be $null
+
+        release_git_lock $git
+        release_git_lock $inuse
+    }
+
+    it 'gives the lock up again when released' {
+        $first = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        release_git_lock $first
+
+        $again = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $again | should -not -be $null
+
+        release_git_lock $again
+    }
+
+    it 'returns at once rather than waiting when asked not to' {
+        # update-repos is hourly and a nightly runs for hours: waiting would
+        # stall the task behind it for the rest of the night.
+        $held = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+
+        $sw = [diagnostics.stopwatch]::StartNew()
+        acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse' | out-null
+        $sw.Stop()
+
+        $sw.Elapsed.TotalSeconds | should -belessthan 2
+
+        release_git_lock $held
+    }
+
+    it 'locks each checkout on its own' {
+        $other = join-path $script:temp_dir "locktree-other-$([guid]::NewGuid())"
+        ni -itemtype directory $other -force | out-null
+
+        $a = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $b = acquire_git_lock $other            -timeout_seconds 0 -kind 'inuse'
+
+        $b | should -not -be $null
+
+        release_git_lock $a
+        release_git_lock $b
+        ri -r -fo $other -ea ignore
     }
 }
 

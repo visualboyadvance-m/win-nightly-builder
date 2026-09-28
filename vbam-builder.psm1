@@ -576,14 +576,32 @@ if ($iswindows) {
 $script:git_lock_files = [System.Collections.Generic.HashSet[string]]::new(
     [StringComparer]::OrdinalIgnoreCase)
 
-function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800) {
+# $kind names which lock is wanted, and two of them exist.
+#
+# "git" is the default and the original: held across one git operation, so two
+# runs cannot fetch the same checkout at once.
+#
+# "inuse" is held by a run across everything it does with a checkout, which for
+# a nightly is hours. update-repos pulls the vcpkg tree every hour, and a pull
+# landing mid-run moves the ports underneath it: a host tool that was current
+# when refresh_host_tools looked is stale an hour later, and the next install
+# that wants it rebuilds it and every dependent across every triplet in one
+# plan, under whichever environment that pass happens to have. That is how
+# ffmpeg:x86-mingw-static came out built with cl.exe on 09-22.
+#
+# The two must not be the same lock. A run holding "git" for its whole duration
+# would block its own update_vcpkg, which takes "git" for each pull it makes.
+#
+# A timeout of 0 or less asks once and gives up, which is what a caller wanting
+# to skip a busy checkout rather than wait out a nightly passes.
+function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800, [string]$kind = 'git') {
     $full = $(if ($resolved = resolve-path $path -ea ignore) { $resolved.path } else { $path })
     $key  = $full.Replace('/', '\').TrimEnd('\').ToLower()
     $hash = [BitConverter]::ToString(
 	[Security.Cryptography.SHA256]::Create().ComputeHash(
 	    [Text.Encoding]::UTF8.GetBytes($key))).Replace('-', '').Substring(0, 16)
 
-    $lock_path = join-path ([IO.Path]::GetTempPath()) "vbam-git-$hash.lock"
+    $lock_path = join-path ([IO.Path]::GetTempPath()) "vbam-$kind-$hash.lock"
     $deadline  = (get-date).AddSeconds($timeout_seconds)
     $waited    = $false
 
@@ -597,6 +615,10 @@ function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800) {
 	    return $lock
 	}
 	catch [IO.IOException] {
+	    # Asked not to wait: the caller has somewhere else to be, and a
+	    # warning about it would be one an hourly task repeats all night.
+	    if ($timeout_seconds -le 0) { return $null }
+
 	    # Waiting for ever is worse than racing: a nightly that never
 	    # finishes would take every run after it down with it.
 	    if ((get-date) -ge $deadline) {
@@ -1237,9 +1259,183 @@ function refresh_host_tools([string[]]$triplets, [string]$host_triplet, [string]
     setup_build_env $host_triplet $toolkit
 
     foreach ($tool in $tools) {
+        $name = $tool -replace '\[[^\]]+\]',''
+
+        # Ask upgrade whether the tool is out of date, and ask it in the only
+        # way that gets a truthful answer.
+        #
+        # This used to be a plain install, which is no answer at all: install
+        # asks whether a package of the name is present for the triplet and
+        # never which version it is, so every tool came back "already
+        # installed" and the whole function did nothing. The 09-22 nightly then
+        # rebuilt ffmpeg, libusb and sdl3 across all eight triplets in one plan
+        # off a stale pkgconf, under an x86 MSVC environment, and both mingw
+        # ffmpegs came out compiled with cl.exe and died on kernel32.lib -- the
+        # exact thing this function exists to prevent.
+        #
+        # upgrade is a dry run unless told otherwise, so this builds nothing.
+        $plan = @(vcpkg_run --triplet $host_triplet --host-triplet $host_triplet upgrade `
+                      --no-binarycaching --allow-unsupported $name 2>&1 | %{ "$_" })
+
+        # The tool itself, not merely something in its plan: a dependent that
+        # is out of date on its own account is its own triplet's business, and
+        # only the tool moving is what takes every triplet down with it.
+        $stale = @($plan | ?{ $_ -match ('^\s*\*?\s*' + [regex]::escape($name) +
+                                         '(\[[^\]]*\])?:' + [regex]::escape($host_triplet) + '@') })
+
+        if (-not $stale) { continue }
+
+        "Host tool $name is out of date on $host_triplet; dropping its dependents and rebuilding it."
+
+        # remove and reinstall rather than upgrade. upgrade would rebuild every
+        # dependent here and now, under this one environment, which is the
+        # thing being avoided; remove takes them out with no compiler involved
+        # at all, and each triplet's own pass reinstalls its own copy under its
+        # own environment -- the only place a mingw one comes out right.
+        #
+        # For a script port everything declares, that is close to the whole
+        # tree. It is also the work an upgrade of it would have done anyway,
+        # only now spread across the passes that can each do it correctly.
+        vcpkg_run --triplet $host_triplet remove --recurse "${name}:$host_triplet"
+
         vcpkg_run --triplet $host_triplet --host-triplet $host_triplet install `
             --no-binarycaching --allow-unsupported --recurse --keep-going $tool
     }
+}
+
+# Keep the logs of a failed build where the next run cannot write over them.
+#
+# vcpkg names its build logs for the port and triplet alone --
+# buildtrees/<port>/install-<triplet>-dbg-out.log and the rest -- so the next
+# run to build that pair replaces them. A failure looked at the morning after
+# is therefore a failure whose logs belong to the build that worked:
+# qtbase:x64-windows failed on four consecutive nights, and by the time anyone
+# read them, 09-27's successful build had overwritten the lot.
+#
+# Copy them out under the date instead, which is what makes the log directory
+# cumulative rather than a window one run deep.
+function archive_build_logs([string]$port, [string]$triplet, [string]$toolkit = '') {
+    $src = join-path $env:VCPKG_ROOT "buildtrees/$port"
+
+    if (-not (test-path $src)) { return }
+
+    # The triplet has to end where the name does. "x64-windows" otherwise
+    # matches every x64-windows-static log as well, and the archive for one
+    # failure fills up with another triplet's build.
+    $re = '(^|[-_])' + [regex]::escape($triplet) + '(-dbg|-rel|-out|-err|\.)'
+
+    $logs = @(gci $src -file -ea ignore | ?{ $_.Name -match $re })
+
+    if (-not $logs) { return }
+
+    $dest = join-path $ROOT ("logs/build-failures/" + (get-date -format 'yyyy-MM-dd') +
+                             "/$port-$triplet" + $(if ($toolkit) { "-$toolkit" }))
+
+    ni -it dir $dest -force -ea ignore | out-null
+
+    $logs | %{ copy-item -literalpath $_.FullName -destination $dest -force -ea ignore }
+
+    "Kept $($logs.count) build log(s) for ${port}:$triplet under $dest"
+}
+
+# The names and modification times sftp reports for a directory, as
+# "<port>" -> [datetime], read out of an "ls -l" listing.
+#
+# Taken apart here rather than where it is fetched so it can be tested without
+# a server. sftp formats the listing itself, from the mtime the protocol gives
+# it as seconds since the epoch, through the client's own localtime -- so the
+# times come back on the builder's clock however the server's is set, and want
+# no timezone correction.
+#
+# What it cannot give is the year for anything recent, or seconds for anything
+# at all: the format is "Sep 21 14:25" inside six months and "Sep 21  2025"
+# outside it. The year is inferred, and a line that will not parse is left out
+# altogether, which reads downstream as "no idea when, so publish it" -- the
+# safe way round.
+function parse_sftp_listing([string[]]$lines, [datetime]$now = (get-date)) {
+    $listing = @{}
+
+    foreach ($line in @($lines)) {
+        # The mode is read as ten characters of anything rather than as
+        # permission bits: the nightly server masks them, sending "-rw-******"
+        # and a "?" where the link count goes. Only the leading character is
+        # load bearing, and it is the one that says directory.
+        if ("$line" -notmatch ('^(?<perm>[-dl]\S{9})\s+\S+\s+\S+\s+\S+\s+' +
+                               '(?<size>\d+)\s+(?<mon>[A-Za-z]{3})\s+(?<day>\d{1,2})\s+' +
+                               '(?<tm>\d{1,2}:\d{2}|\d{4})\s+(?<name>.+?)\s*$')) { continue }
+
+        # Directories are the per-toolkit subdirectories; only files are packages.
+        if ($matches.perm.StartsWith('d')) { continue }
+
+        # All of it off this match before anything else matches: the next -match
+        # replaces $matches, and reading the date out of it afterwards gets
+        # nulls.
+        $name = $matches.name
+        $mon  = $matches.mon
+        $day  = $matches.day
+        $tm   = $matches.tm
+
+        if ($name -notmatch '^([^_\s]+)_[^_\s]+_[^_\s]+\.zip$') { continue }
+
+        $port = $matches[1]
+
+        $stamp = $null
+
+        try {
+            if ($tm -match '^\d{4}$') {
+                $stamp = [datetime]::ParseExact("$mon $day $tm", 'MMM d yyyy',
+                                                [cultureinfo]::InvariantCulture)
+            }
+            else {
+                $stamp = [datetime]::ParseExact("$mon $day $($now.Year) $tm", 'MMM d yyyy H:mm',
+                                                [cultureinfo]::InvariantCulture)
+
+                # No year in the listing, so it is this one unless that puts the
+                # file in the future, which means it is last year's.
+                if ($stamp -gt $now.AddDays(1)) { $stamp = $stamp.AddYears(-1) }
+            }
+        }
+        catch {
+            # A month name the invariant culture does not know, most likely,
+            # which leaves this entry with no time and the caller republishing.
+            continue
+        }
+
+        $listing[$port] = $stamp
+    }
+
+    $listing
+}
+
+# What the server holds in one package directory, as parse_sftp_listing gives
+# it back. An empty answer covers a directory that is empty, missing or
+# unreadable alike, and all three read the same way downstream: publish it.
+#
+# In its own scope for the erroractionpreference, for the reason the upload
+# pass in vcpkg-daily.ps1 gives at length: sftp says hello on stderr, Windows
+# PowerShell turns a native command's redirected stderr into a record, and stop
+# would make the greeting fatal.
+function remote_package_listing([string]$remote_dir) {
+    $lines = & {
+        $erroractionpreference = 'continue'
+
+        @('ls -l' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null)
+    }
+
+    parse_sftp_listing @($lines | %{ "$_" })
+}
+
+# Whether a package built at $built wants publishing over what the server has.
+#
+# Missing from the listing, or built since the copy up there was put, and it
+# goes. sftp reports minutes and no seconds, so a copy uploaded in the same
+# minute as the build can read as older than it; $slack covers that truncation
+# and nothing else, an actual rebuild being nowhere near that close.
+function package_needs_publishing([hashtable]$remote, [string]$port, [datetime]$built,
+                                  [timespan]$slack = [timespan]::FromMinutes(2)) {
+    if ((-not $remote) -or (-not $remote.contains($port))) { return $true }
+
+    $built -gt ($remote[$port] + $slack)
 }
 
 # What the tree has installed, and a stamp per package that moves whenever
@@ -1275,25 +1471,6 @@ function installed_package_stamps([string]$vcpkg_root = '') {
     }
 
     $stamps
-}
-
-# The packages $after has that $before did not, or has under a different stamp:
-# what the run built or rebuilt. A set rather than a list, the callers asking
-# about one package at a time.
-#
-# A package $before had and $after does not is left out on purpose. Something
-# removed and not put back has nothing to package, and the copy already
-# published is the last one that was real.
-function changed_packages([hashtable]$before, [hashtable]$after) {
-    $changed = @{}
-
-    foreach ($key in @($after.keys)) {
-        if ((-not $before) -or (-not $before.contains($key)) -or ($before[$key] -ne $after[$key])) {
-            $changed[$key] = $true
-        }
-    }
-
-    $changed
 }
 
 function get_host_triplet {
@@ -1350,6 +1527,8 @@ function task_action {
 
 export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
-		              installed_package_stamps,changed_packages,task_action,vcpkg_run,git_run, `
+		              installed_package_stamps,archive_build_logs, `
+		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `
+		              task_action,vcpkg_run,git_run, `
 		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg
