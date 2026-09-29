@@ -1035,9 +1035,27 @@ function get-triplets {
 }
 
 # The port list a triplet wants: Android takes the cross list, everything else
-# the host's own. Callers pass the triplet object or its name.
+# the host's own, and the XP target the host's own without libusb. Callers pass
+# the triplet object or its name.
+#
+# libusb arrives as SDL3's libusb feature and nothing else asks for it. It
+# imports CancelIoEx and the condition variable API statically, all four of
+# them Vista or later, and a static import of a function the system has not got
+# stops the binary loading at all rather than failing when it is called -- so
+# the XP build died on startup naming CancelIoEx. They are the only
+# Vista-or-later imports in the whole link. Without the feature SDL keeps its
+# native Windows HID backend, so the raw USB path goes and controller support
+# stays.
+#
+# The emulator's own CMakeLists drops it for the same triplet, from
+# VBAM_TARGET_WINXP. Both have to agree: this list is what the builder
+# pre-builds and publishes, and that one is what a build asks vcpkg for.
 function get_dep_ports([string]$triplet = '') {
-    if ($triplet -match '-android$') { $ANDROID_DEP_PORTS } else { $DEP_PORTS }
+    if ($triplet -match '-android$') { return $ANDROID_DEP_PORTS }
+
+    if ($triplet -match '^x86-mingw') { return @($DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]') }
+
+    $DEP_PORTS
 }
 
 # The host tooling a triplet wants: $HOST_DEP_PORTS for a triplet that can host

@@ -1066,6 +1066,45 @@ describe 'HOST_TRIPLETS' {
 # The build tooling a triplet gets a copy of: the host triplets and nothing
 # else. vcpkg-daily.ps1 adds it to each triplet's own port list.
 
+describe 'get_dep_ports' {
+
+    it 'gives an ordinary triplet the host list with libusb' {
+        @(get_dep_ports 'x64-windows-static' | ?{ $_ -like 'sdl3*' }) |
+            should -be @('sdl3[vulkan,libusb]')
+    }
+
+    it 'drops libusb for the XP target' {
+        # libusb imports CancelIoEx and the condition variable API statically,
+        # all four Vista or later, and a static import of a function the system
+        # has not got stops the binary loading rather than failing when called.
+        # SDL3's libusb feature is the only thing that asks for it.
+        @(get_dep_ports 'x86-mingw-static' | ?{ $_ -like 'sdl3*' }) |
+            should -be @('sdl3[vulkan]')
+    }
+
+    it 'leaves the 64 bit mingw triplet alone' {
+        # Only the 32 bit mingw build targets XP.
+        @(get_dep_ports 'x64-mingw-static' | ?{ $_ -like 'sdl3*' }) |
+            should -be @('sdl3[vulkan,libusb]')
+    }
+
+    it 'drops nothing else from the XP list' {
+        # The rewrite must touch the sdl3 entry and no other: everything else
+        # the XP build links is what every other Windows triplet links.
+        $xp   = @(get_dep_ports 'x86-mingw-static')
+        $full = @(get_dep_ports 'x64-windows-static')
+
+        $xp.Count | should -be $full.Count
+
+        @($xp | ?{ $_ -notlike 'sdl3*' }) | should -be @($full | ?{ $_ -notlike 'sdl3*' })
+    }
+
+    it 'still gives an Android triplet the cross list' {
+        @(get_dep_ports 'arm64-android' | ?{ $_ -like 'sdl3*' }) |
+            should -be @('sdl3[vulkan]')
+    }
+}
+
 describe 'get_host_dep_ports' {
 
     it 'gives the host tooling to a triplet that can host a build' {
