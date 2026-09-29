@@ -1535,6 +1535,46 @@ describe 'archive_build_logs' {
     }
 }
 
+describe 'is_whole_run' {
+
+    it 'calls a default run whole' {
+        is_whole_run @($TRIPLETS) | should -be $true
+    }
+
+    it 'does not call a run narrowed to one triplet whole' {
+        # `--triplets x86-mingw-static --packages sdl3` refreshed a stale host
+        # tool, which removed 39 packages across eight triplets, and then
+        # rebuilt one. A refresh only puts things back when the run builds them.
+        is_whole_run @('x86-mingw-static') | should -be $false
+    }
+
+    it 'does not call a run narrowed to one package whole' {
+        is_whole_run @($TRIPLETS) @('sdl3') | should -be $false
+    }
+
+    it 'does not call a run with --skip-packages whole' {
+        is_whole_run @($TRIPLETS) @() @('ffmpeg') | should -be $false
+    }
+
+    it 'ignores the order the triplets come in' {
+        is_whole_run @($TRIPLETS | sort-object) | should -be $true
+    }
+
+    it 'does not call a subset whole even when it is all but one' {
+        is_whole_run @($TRIPLETS | select-object -skip 1) | should -be $false
+    }
+
+    it 'is not fooled by a parameter that shadows the platform list' {
+        # PowerShell variable names are case insensitive, so a parameter named
+        # $triplets is the same variable as $TRIPLETS. Reading it unqualified
+        # inside such a function returns the argument, and every subset then
+        # compares equal to itself and looks like a whole run.
+        function shadow([string[]]$triplets) { is_whole_run $triplets }
+
+        shadow @('x86-mingw-static') | should -be $false
+    }
+}
+
 describe 'acquire_git_lock kinds' {
 
     beforeeach {

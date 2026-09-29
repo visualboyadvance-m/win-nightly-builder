@@ -1255,7 +1255,32 @@ function get_host_ports([string[]]$triplets, [string]$host_triplet,
 # displaces come out removed, with no compiler involved in removing them, and
 # each triplet's own pass reinstalls its own copy under its own environment,
 # which is the only place a mingw one can come out right.
-function refresh_host_tools([string[]]$triplets, [string]$host_triplet, [string]$toolkit) {
+# Whether a run covers everything, which is what makes refreshing a shared host
+# tool safe to do: see refresh_host_tools below.
+#
+# Naming a package or a triplet narrows it. The order the triplets arrive in
+# does not matter, only the set.
+#
+# $script:TRIPLETS rather than $TRIPLETS: PowerShell variable names are case
+# insensitive, so a parameter called $triplets -- which refresh_host_tools has
+# -- is the same variable, and reading it unqualified in such a function gets
+# the argument instead of the platform's list.
+function is_whole_run([string[]]$run_triplets,
+                      [string[]]$packages = @(), [string[]]$skip_packages = @()) {
+    if ($packages -or $skip_packages) { return $false }
+
+    -not (compare-object @($run_triplets) @($script:TRIPLETS))
+}
+
+# -WholeRun says the caller is going to rebuild everything this removal
+# displaces. Without it a stale tool is reported and left alone, because the
+# cure is worse than the disease: refreshing one takes out every installed
+# package that depends on it, across every triplet, and only a run that is
+# building the lot puts them back. `--triplets x86-mingw-static --packages
+# sdl3` removed 39 packages for eight triplets and then rebuilt one, which is
+# the same shape as the failure this function exists to prevent.
+function refresh_host_tools([string[]]$triplets, [string]$host_triplet, [string]$toolkit,
+                            [switch]$WholeRun) {
     if (-not $host_triplet) { return }
 
     # -Tools is "on the host and nowhere else", so the host triplet's own plan
@@ -1302,6 +1327,14 @@ function refresh_host_tools([string[]]$triplets, [string]$host_triplet, [string]
                                          '(\[[^\]]*\])?:' + [regex]::escape($host_triplet) + '@') })
 
         if (-not $stale) { continue }
+
+        if (-not $WholeRun) {
+            write-warning ("host tool $name is out of date on $host_triplet. Refreshing it " +
+                           "removes every installed package that depends on it, across every " +
+                           "triplet, and this run is not building those back -- so it is left " +
+                           "alone. Run without --triplets or --packages to refresh it.")
+            continue
+        }
 
         "Host tool $name is out of date on $host_triplet; dropping its dependents and rebuilding it."
 
@@ -1556,10 +1589,11 @@ function task_action {
 	    " *>> $ROOT/logs/$log")
 }
 
-export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
+export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
 		              installed_package_stamps,archive_build_logs, `
 		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `
+		              is_whole_run, `
 		              task_action,vcpkg_run,git_run, `
 		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg

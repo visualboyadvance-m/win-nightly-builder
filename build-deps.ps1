@@ -23,7 +23,9 @@ foreach ($triplet in $build_triplets) {
         if (-not $host_tools_done["$tk"]) {
             $host_tools_done["$tk"] = $true
 
-            refresh_host_tools $build_triplets (get_host_triplet) $tk
+            # -WholeRun only when no triplet was named: see refresh_host_tools.
+            refresh_host_tools $build_triplets (get_host_triplet) $tk `
+                -WholeRun:(is_whole_run @($build_triplets | %{ "$_" }))
 
             # refresh_host_tools leaves the environment on the host triplet.
             setup_build_env $triplet $tk

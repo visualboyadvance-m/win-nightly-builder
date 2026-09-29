@@ -133,6 +133,14 @@ function held_back_host_ports([string]$triplet, [string[]]$added) {
 
 $selected_port_names = @($build_triplets | %{ selected_ports $_ }) -replace '\[[^\]]+\]','' | select-object -unique
 
+# Whether this run is going to rebuild everything, which decides whether the
+# shared host tooling may be refreshed. Refreshing one of those removes every
+# installed package that depends on it across every triplet, and only a run
+# building the lot puts them back; a run narrowed to a package or a triplet
+# would leave the rest deleted.
+$whole_run = is_whole_run @($build_triplets | %{ "$_" }) $packages $skip_packages
+
+
 "INFO: vcpkg packages upgrade started on $(date)."
 
 # set-content ends lines the way the platform does, so a Windows builder
@@ -452,7 +460,7 @@ foreach ($triplet in $build_triplets) {
         if (-not $host_tools_done["$tk"]) {
             $host_tools_done["$tk"] = $true
 
-            refresh_host_tools $build_triplets $host_t $tk
+            refresh_host_tools $build_triplets $host_t $tk -WholeRun:$whole_run
 
             # refresh_host_tools leaves the environment on the host triplet.
             setup_build_env $triplet $tk
