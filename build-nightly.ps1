@@ -84,7 +84,17 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
 	    | & $grep -cE 'po/wxvbam/.*\.po$' `
     )
 
-    $translations_only = ($sources_changed      -eq 0) -and `
+    # -f means build the lot, which is more than not skipping.
+    #
+    # $forced used to gate only the branch below that skips a checkout with
+    # nothing worth building, and left this alone -- so a run forced against a
+    # checkout whose only new commits touched .po files still took the
+    # translations path: one triplet instead of the ones asked for,
+    # TRANSLATIONS_ONLY=TRUE handed to cmake, and translations.zip as the only
+    # artifact. Someone asking for a full build of a named triplet got a
+    # translations build of whichever triplet happened to sort first.
+    $translations_only = (-not $forced) -and `
+			 ($sources_changed      -eq 0) -and `
 			 ($translations_changed -gt 0)
 
     if ((-not $forced) -and `
