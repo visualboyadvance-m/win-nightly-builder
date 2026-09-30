@@ -441,10 +441,11 @@ function add_pack_unit([string]$triplet, [string]$toolkit, [string[]]$packages) 
 # exclusively opened file when the process holding it goes, so a run that dies
 # releases it on the way out, which is the case that matters.
 $vcpkg_tree      = join-path $REPOS_ROOT vcpkg
-$vcpkg_tree_lock = acquire_git_lock $vcpkg_tree -timeout_seconds 300 -kind 'inuse'
+$vcpkg_tree_lock = acquire_git_lock $vcpkg_tree -timeout_seconds 0 -kind 'inuse'
 
 if (-not $vcpkg_tree_lock) {
-    write-warning "could not take the in-use lock on $vcpkg_tree; update-repos may move the ports tree under this run"
+    write-warning ("another run is building out of $vcpkg_tree. This one builds against the tree " +
+                   "as it stands and will not update it, and update_vcpkg says the same.")
 }
 
 foreach ($triplet in $build_triplets) {

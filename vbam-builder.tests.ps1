@@ -1635,6 +1635,45 @@ describe 'acquire_git_lock kinds' {
         release_git_lock $held
     }
 
+    it 'knows when this process is the holder' {
+        # update_vcpkg asks this before probing, so a run holding the in-use
+        # lock for the length of its build does not queue behind itself.
+        holds_git_lock $script:lock_tree 'inuse' | should -be $false
+
+        $mine = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+
+        holds_git_lock $script:lock_tree 'inuse' | should -be $true
+
+        release_git_lock $mine
+
+        holds_git_lock $script:lock_tree 'inuse' | should -be $false
+    }
+
+    it 'answers separately for the two kinds' {
+        $git = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'git'
+
+        holds_git_lock $script:lock_tree 'git'   | should -be $true
+        holds_git_lock $script:lock_tree 'inuse' | should -be $false
+
+        release_git_lock $git
+    }
+
+    it 'derives the same path that acquiring uses' {
+        # Two spellings of one checkout are one lock, and the file the helper
+        # names is the file acquiring creates -- if those drifted apart,
+        # holds_git_lock would answer about a lock nobody takes.
+        $a = git_lock_path $script:lock_tree 'inuse'
+        $b = git_lock_path ($script:lock_tree + '') 'inuse'
+
+        $a | should -be $b
+
+        $mine = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+
+        (test-path $a) | should -be $true
+
+        release_git_lock $mine
+    }
+
     it 'locks each checkout on its own' {
         $other = join-path $script:temp_dir "locktree-other-$([guid]::NewGuid())"
         ni -itemtype directory $other -force | out-null

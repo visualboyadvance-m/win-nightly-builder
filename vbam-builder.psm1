@@ -594,14 +594,28 @@ $script:git_lock_files = [System.Collections.Generic.HashSet[string]]::new(
 #
 # A timeout of 0 or less asks once and gives up, which is what a caller wanting
 # to skip a busy checkout rather than wait out a nightly passes.
-function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800, [string]$kind = 'git') {
+# Where a checkout's lock of the given kind lives. One definition, so that
+# holds_git_lock below and acquire_git_lock cannot disagree about it.
+function git_lock_path([string]$path, [string]$kind = 'git') {
     $full = $(if ($resolved = resolve-path $path -ea ignore) { $resolved.path } else { $path })
     $key  = $full.Replace('/', '\').TrimEnd('\').ToLower()
     $hash = [BitConverter]::ToString(
 	[Security.Cryptography.SHA256]::Create().ComputeHash(
 	    [Text.Encoding]::UTF8.GetBytes($key))).Replace('-', '').Substring(0, 16)
 
-    $lock_path = join-path ([IO.Path]::GetTempPath()) "vbam-$kind-$hash.lock"
+
+    join-path ([IO.Path]::GetTempPath()) "vbam-$kind-$hash.lock"
+}
+
+# Whether this process is already holding that lock, so it never goes asking
+# for one it has and waits on itself.
+function holds_git_lock([string]$path, [string]$kind = 'git') {
+    $script:git_lock_files.Contains((git_lock_path $path $kind))
+}
+
+function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800, [string]$kind = 'git') {
+    $full      = $(if ($resolved = resolve-path $path -ea ignore) { $resolved.path } else { $path })
+    $lock_path = git_lock_path $path $kind
     $deadline  = (get-date).AddSeconds($timeout_seconds)
     $waited    = $false
 
@@ -816,7 +830,34 @@ function update_vcpkg([string]$toolkit = '') {
 
     $vcpkg_dir = if ($toolkit) { $env:VCPKG_ROOT.TrimEnd('/\') + "-$toolkit" } else { $env:VCPKG_ROOT }
 
-    update_git_checkout $vcpkg_dir -origin git@github.com:microsoft/vcpkg
+    # A checkout another run is building out of is left exactly where it is.
+    #
+    # Pulling moves the ports tree under that run: a host tool current when it
+    # looked goes stale mid-build, and the next install wanting it drags every
+    # dependent across every triplet into one plan, under whichever environment
+    # that pass happens to have. Not being able to take the lock is the answer
+    # rather than something to wait out -- waiting only moves the tree later in
+    # their build instead of earlier.
+    #
+    # Asked for and let go rather than held: holding it for the length of a
+    # build is what the caller does. This process holding it already is the
+    # ordinary case, and must not be made to queue behind itself.
+    if (holds_git_lock $vcpkg_dir 'inuse') {
+        $may_update = $true
+    }
+    else {
+        $probe      = acquire_git_lock $vcpkg_dir -timeout_seconds 0 -kind 'inuse'
+        $may_update = [bool]$probe
+
+        release_git_lock $probe
+    }
+
+    if ($may_update) {
+        update_git_checkout $vcpkg_dir -origin git@github.com:microsoft/vcpkg
+    }
+    else {
+        write-warning "another run is building out of $vcpkg_dir; leaving it at the commit it has"
+    }
 
     # bootstrap replaces vcpkg.exe, and it cannot while another run is using
     # that tree: Windows holds a running executable's image open, and a
@@ -1593,7 +1634,7 @@ export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_D
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
 		              installed_package_stamps,archive_build_logs, `
 		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `
-		              is_whole_run, `
+		              is_whole_run,git_lock_path,holds_git_lock, `
 		              task_action,vcpkg_run,git_run, `
 		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg
