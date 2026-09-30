@@ -514,6 +514,10 @@ foreach ($triplet in $build_triplets) {
             }
         }
 
+        # What failed in this pass, keyed by port so the diff below does not
+        # report the same one twice under a different wording.
+        $failed_ports = @{}
+
         # Upgrade each port as soon as it has been installed, rather than
         # sweeping the whole list once the list is through. install only asks
         # whether a package of that name is present for the triplet and never
@@ -526,10 +530,34 @@ foreach ($triplet in $build_triplets) {
         foreach ($port in $build_ports) {
             vcpkg_run --triplet $triplet --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $port
 
-            $port_name = $port -replace '\[[^\]]+\]',''
+            # vcpkg's own exit status, which nothing here used to read.
+            #
+            # The diff further down catches a port that failed to build by
+            # noticing it is not installed afterwards, and that is blind to
+            # exactly the case where an older copy is already in the tree: the
+            # install fails, the stale package stays installed and listed, and
+            # the run packages and publishes it as the build that was asked
+            # for. That is how `--triplet x86-mingw-static --package wxwidgets`
+            # came back clean on 2026-09-30 having built nothing at all --
+            # another vcpkg held the installed-tree lock, so every install
+            # exited 1 without starting, and the wxwidgets already sitting
+            # there answered for it.
+            $install_code = $LASTEXITCODE
+            $port_name    = $port -replace '\[[^\]]+\]',''
+
+            if ($install_code -ne 0) {
+                $failed_ports[$port_name] = $true
+                write-warning "${port_name}:${triplet}: vcpkg install exited $install_code"
+                continue
+            }
 
             if ($port_name -in $upgrade_port_names) {
                 upgrade_port $triplet $host_t $port_name
+
+                if ($LASTEXITCODE -ne 0) {
+                    $failed_ports[$port_name] = $true
+                    write-warning "${port_name}:${triplet}: vcpkg upgrade exited $LASTEXITCODE"
+                }
             }
         }
 
@@ -543,14 +571,25 @@ foreach ($triplet in $build_triplets) {
         # what was asked for against what came out installed and say the
         # difference out loud.
         foreach ($missing in @($build_port_names | ?{ $_ -notin $installed_names })) {
-            $build_failures += "${missing}:$triplet$(if ($tk) { " ($tk)" })"
-            write-warning "${missing}:$triplet did not build, nothing to package"
+            if (-not $failed_ports.contains($missing)) {
+                write-warning "${missing}:$triplet did not build, nothing to package"
+            }
 
-            # Before the next run builds that pair and writes over them.
-            archive_build_logs $missing "$triplet" $tk
+            $failed_ports[$missing] = $true
         }
 
-        add_pack_unit "$triplet" $tk @($installed_names | ?{ -not $packages -or $_ -in $build_port_names })
+        foreach ($failed in @($failed_ports.keys)) {
+            $build_failures += "${failed}:$triplet$(if ($tk) { " ($tk)" })"
+
+            # Before the next run builds that pair and writes over them.
+            archive_build_logs $failed "$triplet" $tk
+        }
+
+        # A port whose build failed is not packaged from whatever copy of it
+        # happens to be left in the tree, however well that copy lists.
+        add_pack_unit "$triplet" $tk @($installed_names | ?{
+            (-not $packages -or $_ -in $build_port_names) -and (-not $failed_ports.contains($_))
+        })
 
         # For cross-compiling triplets, build the host-tool dependencies for
         # the target architecture's native host triplet (e.g. arm64-windows for
@@ -960,6 +999,20 @@ if ($upload_failures.count) {
 
 if ($unchanged_count) {
     "INFO: $unchanged_count package(s) this run did not rebuild were left published as they are; -f repacks and reuploads everything."
+}
+
+# A run that built nothing it was asked for, packaged nothing or published
+# nothing is not a successful one, whatever the warnings above said: those go
+# by in the log and the exit status is what the task, the cron job and the next
+# command in a `;` chain actually read. The run gets this far either way --
+# stopping at the first failed port would cost every triplet behind it -- so
+# the failures are counted here rather than thrown when they happen.
+if ($build_failures -or $pack_failures.count -or $upload_failures.count) {
+    write-error ("vcpkg upgrade failed: $((@($build_failures) | sort-object -unique).count) build, " +
+                 "$((@($pack_failures) | sort-object -unique).count) packaging, " +
+                 "$((@($upload_failures) | sort-object -unique).count) upload; see the WARNING lines above")
+
+    exit 1
 }
 
 'INFO: vcpkg packages upgrade successful!'
