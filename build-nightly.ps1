@@ -136,6 +136,15 @@ if (-not $plan) {
 
 "INFO: Build started on $(date)."
 
+# Triplets that produced nothing publishable, and what went wrong for each.
+#
+# A failure takes its own triplet out of the run and nothing else: the rest are
+# still built, staged and published, since one broken toolchain should not cost
+# a night's nightlies for every other architecture. What it must not do is pass
+# unmentioned, so each one is named again at the end, where the run also stops
+# calling itself successful.
+$build_failures = @()
+
 foreach ($item in $plan) {
     $triplet   = $item.triplet
     $build_dir = "$($item.repo)/build-$triplet"
@@ -173,7 +182,40 @@ foreach ($item in $plan) {
 		   -G Ninja
     }
 
-    if (test-path build.ninja) { ninja }
+    # cmake's own exit status, read before anything else can overwrite it.
+    #
+    # A configure that fails writes no build.ninja, and running ninja only when
+    # that file is there turned a failed configure into a silent no-op: no
+    # binary, an empty staging directory, nothing to upload, no upload left to
+    # fail, and "Build successful!" at the end of it. The XP nightly went out
+    # like that on 2026-09-30 having stopped at "Could NOT find Gettext".
+    $configure_code = $LASTEXITCODE
+
+    if ($configure_code -ne 0) {
+	$build_failures += "${triplet}: cmake configure exited $configure_code"
+	write-warning "${triplet}: cmake configure exited $configure_code, skipping it"
+	$item.failed = $true
+	popd
+	continue
+    }
+
+    # A configure that claims success and leaves no build file behind is not a
+    # state to run ninja from, and not one to publish from either.
+    if (-not (test-path build.ninja)) {
+	$build_failures += "${triplet}: cmake wrote no build.ninja"
+	write-warning "${triplet}: cmake wrote no build.ninja, skipping it"
+	$item.failed = $true
+	popd
+	continue
+    }
+
+    ninja
+
+    if ($LASTEXITCODE -ne 0) {
+	$build_failures += "${triplet}: ninja exited $LASTEXITCODE"
+	write-warning "${triplet}: ninja exited $LASTEXITCODE, nothing to publish"
+	$item.failed = $true
+    }
 
     popd
 }
@@ -184,6 +226,8 @@ ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir | out-null
 
 foreach ($item in $plan) {
+    if ($item.failed) { continue }
+
     # The Android builds produce visualboyadvance-m-<ARCH_NAME>.apk, the native
     # ones a zip; either way the name the build chose is the name that gets
     # published.
@@ -191,7 +235,19 @@ foreach ($item in $plan) {
 		 elseif ($item.triplet -in $ANDROID_TRIPLETS) { '*.apk' }
 		 else                                         { '*.zip' }
 
-    cpi -fo "$($item.repo)/build-$($item.triplet)/$artifacts" $stage_dir
+    # Resolved rather than copied blind. A build that reported success and left
+    # nothing behind is the same silent hole as a configure that failed, and
+    # copy-item saying "cannot find path" into a log nobody reads is not the
+    # same as the run saying so at the end.
+    $found = @(gci "$($item.repo)/build-$($item.triplet)/$artifacts" -ea ignore)
+
+    if (-not $found) {
+	$build_failures += "$($item.triplet): built, but left no $artifacts to publish"
+	write-warning "$($item.triplet): built, but left no $artifacts to publish"
+	continue
+    }
+
+    cpi -fo $found $stage_dir
 }
 
 pushd $stage_dir
@@ -233,10 +289,24 @@ popd
 ri -r -fo $stage_dir
 
 # Not "successful" when something did not go out: a nightly that says it
-# published and did not is the one failure nobody goes looking for.
-if ($upload_failures) {
-    write-error "failed to upload: $($upload_failures -join ', ')"
+# published and did not is the one failure nobody goes looking for. The run
+# carries on past a failed triplet, so by the time it gets here the log is
+# mostly other triplets succeeding and the failure is thousands of lines back
+# -- name every one of them again, and leave a non-zero status behind for
+# whatever started the run.
+if ($build_failures -or $upload_failures) {
+    foreach ($failure in $build_failures) {
+	write-warning "FAILED: $failure"
+    }
+
+    if ($upload_failures) {
+	write-warning "FAILED: built but not published: $($upload_failures -join ', ')"
+    }
+
+    write-error ("nightly failed: $(@($build_failures).count) build, " +
+		 "$(@($upload_failures).count) upload; see the FAILED lines above")
+
+    exit 1
 }
-else {
-    'INFO: Build successful!'
-}
+
+'INFO: Build successful!'
