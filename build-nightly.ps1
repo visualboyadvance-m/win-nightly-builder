@@ -134,6 +134,35 @@ if (-not $plan) {
     return
 }
 
+# Held for as long as this run is compiling, so the daily vcpkg upgrade is not
+# removing packages out of the installed tree while a build links against them.
+#
+# They overlap by design: the upgrade starts at 21:00 and the nightly at 23:00,
+# and the upgrade regularly runs past midnight. It rebuilds wxwidgets one
+# triplet at a time and `vcpkg upgrade` removes a package before it rebuilds
+# it, so there is a window per triplet where the headers are simply not there.
+# Both passes work through the triplets in much the same order, so the window
+# lands on whichever sorts last: on 2026-10-09 the upgrade reached `Removing
+# wxwidgets:arm64-windows-static` while this script was compiling against it,
+# and 451 targets in, every wx include stopped resolving at once.
+#
+# The same lock vcpkg-daily.ps1 holds while it installs, and the one
+# update-repos.ps1 checks before pulling the checkout -- one answer to "is a
+# run working out of this tree", asked by everything that would disturb one.
+#
+# Taken after the plan, so a night with nothing to build does not sit here
+# waiting for an upgrade whose packages it was never going to touch. Long
+# enough to outlast an upgrade, and acquire_git_lock warns and returns null
+# rather than throwing when it does not, which leaves a timeout exactly where
+# this script already was: racing, but saying so.
+#
+# Only one direction. An upgrade starting while a nightly holds this asks for
+# the lock without waiting and goes ahead regardless, by the semantics that
+# task was given -- which would need a nightly still running at 21:00 the next
+# evening to matter.
+$vcpkg_tree      = join-path $REPOS_ROOT vcpkg
+$vcpkg_tree_lock = acquire_git_lock $vcpkg_tree -timeout_seconds 14400 -kind 'inuse'
+
 "INFO: Build started on $(date)."
 
 # Triplets that produced nothing publishable, and what went wrong for each.
@@ -221,6 +250,10 @@ foreach ($item in $plan) {
 }
 
 teardown_build_env
+
+# Nothing below this reads the vcpkg tree: what is left is staging the
+# artifacts the builds produced and sending them up.
+release_git_lock $vcpkg_tree_lock
 
 ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir | out-null
