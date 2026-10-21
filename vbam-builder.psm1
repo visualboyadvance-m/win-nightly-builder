@@ -128,6 +128,12 @@ $TRIPLETS       = if ($iswindows) {
 # they are opt-in via --android rather than part of $TRIPLETS.
 $ANDROID_TRIPLETS = 'arm64-android','arm-neon-android','x64-android','x86-android','riscv64-android'
 
+# The toolkits beside the default one. Each gets a vcpkg tree of its own next to
+# the default checkout -- v143 installs into vcpkg-v143 beside it -- so
+# this is also the list vcpkg_tree_paths builds the lock set from, and the two
+# must not be able to disagree about what trees exist.
+$TOOLKITS       = @('v143')
+
 # The triplets that can host a build on this platform: the plain OS ones, with
 # neither -static nor mingw, which are the triplets vcpkg builds host tools
 # for. On Windows that is every architecture's own machine -- x64-windows,
@@ -650,6 +656,24 @@ function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800, [string]$
     }
 }
 
+# Every vcpkg tree this builder installs into: the default checkout and one
+# beside it per toolkit.
+#
+# A build reads headers and libraries out of installed/ under one of these, and
+# `vcpkg upgrade` removes a package before it rebuilds it, so a run compiling
+# against a tree another run is installing into can watch its includes vanish
+# mid-link -- which is what happened to arm64-windows-static on 2026-10-09.
+# Locking the default tree alone left x64-windows-static exposed to the same
+# thing, that one building under v143.
+#
+# Always in the same order, so two runs asking for the whole set take them in
+# the same sequence and cannot each end up holding what the other waits for.
+function vcpkg_tree_paths() {
+    $root = join-path $REPOS_ROOT vcpkg
+
+    @($root) + @($TOOLKITS | ?{ $_ } | sort-object | %{ "$root-$_" })
+}
+
 function release_git_lock($lock) {
     if (-not $lock) { return }
 
@@ -1065,7 +1089,7 @@ function get-triplets {
         $tks = if ($toolkit) {
             @($toolkit)
         } elseif ($t -match $toolkit_triplet_re) {
-            @('', 'v143')
+            @('') + $TOOLKITS
         } else {
             @('')
         }
@@ -1630,11 +1654,11 @@ function task_action {
 	    " *>> $ROOT/logs/$log")
 }
 
-export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
+export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
 		              installed_package_stamps,archive_build_logs, `
 		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `
-		              is_whole_run,git_lock_path,holds_git_lock, `
+		              is_whole_run,git_lock_path,holds_git_lock,vcpkg_tree_paths, `
 		              task_action,vcpkg_run,git_run, `
 		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg

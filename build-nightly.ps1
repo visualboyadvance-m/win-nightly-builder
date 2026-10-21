@@ -146,22 +146,28 @@ if (-not $plan) {
 # wxwidgets:arm64-windows-static` while this script was compiling against it,
 # and 451 targets in, every wx include stopped resolving at once.
 #
-# The same lock vcpkg-daily.ps1 holds while it installs, and the one
-# update-repos.ps1 checks before pulling the checkout -- one answer to "is a
-# run working out of this tree", asked by everything that would disturb one.
+# The same locks vcpkg-daily.ps1 holds while it installs, and the ones
+# update-repos.ps1 checks before pulling a checkout -- one answer to "is a run
+# working out of this tree", asked by everything that would disturb one.
+#
+# Every tree, not just the default: x64-windows-static builds under v143 and so
+# reads out of vcpkg-v143/installed, which locking the default checkout alone
+# left exposed to exactly the above. vcpkg_tree_paths fixes the order.
 #
 # Taken after the plan, so a night with nothing to build does not sit here
-# waiting for an upgrade whose packages it was never going to touch. Long
-# enough to outlast an upgrade, and acquire_git_lock warns and returns null
-# rather than throwing when it does not, which leaves a timeout exactly where
-# this script already was: racing, but saying so.
+# waiting for an upgrade whose packages it was never going to touch. Eight
+# hours because four was not enough -- the 2026-10-16 upgrade outlasted it and
+# this script went ahead unlocked at 03:01 -- and acquire_git_lock warns and
+# returns null rather than throwing when it times out, which leaves a timeout
+# exactly where this script was before any of this: racing, but saying so.
 #
-# Only one direction. An upgrade starting while a nightly holds this asks for
-# the lock without waiting and goes ahead regardless, by the semantics that
-# task was given -- which would need a nightly still running at 21:00 the next
-# evening to matter.
-$vcpkg_tree      = join-path $REPOS_ROOT vcpkg
-$vcpkg_tree_lock = acquire_git_lock $vcpkg_tree -timeout_seconds 14400 -kind 'inuse'
+# Only one direction. An upgrade starting while a nightly holds these asks
+# without waiting and goes ahead regardless, by the semantics that task was
+# given -- which would need a nightly still running at 21:00 the next evening
+# to matter.
+$vcpkg_tree_locks = @(vcpkg_tree_paths | %{
+    acquire_git_lock $_ -timeout_seconds 28800 -kind 'inuse'
+})
 
 "INFO: Build started on $(date)."
 
@@ -251,9 +257,9 @@ foreach ($item in $plan) {
 
 teardown_build_env
 
-# Nothing below this reads the vcpkg tree: what is left is staging the
-# artifacts the builds produced and sending them up.
-release_git_lock $vcpkg_tree_lock
+# Nothing below this reads a vcpkg tree: what is left is staging the artifacts
+# the builds produced and sending them up.
+$vcpkg_tree_locks | %{ release_git_lock $_ }
 
 ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir | out-null

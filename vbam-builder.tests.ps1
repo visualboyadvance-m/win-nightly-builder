@@ -1575,6 +1575,43 @@ describe 'is_whole_run' {
     }
 }
 
+describe 'vcpkg_tree_paths' {
+
+    it 'names the default checkout first' {
+        # Both scripts take these in the order they come back, so the order is
+        # the whole reason two runs asking for the set cannot deadlock.
+        @(vcpkg_tree_paths)[0] | should -be (join-path $REPOS_ROOT vcpkg)
+    }
+
+    it 'names one tree per toolkit beside it' {
+        $paths = @(vcpkg_tree_paths)
+        $root  = join-path $REPOS_ROOT vcpkg
+
+        $paths.count | should -be (1 + @($TOOLKITS | ?{ $_ }).count)
+
+        foreach ($tk in @($TOOLKITS | ?{ $_ })) {
+            $paths | should -contain "$root-$tk"
+        }
+    }
+
+    it 'gives every tree a lock of its own' {
+        # One lock standing in for two trees would be a lock that serialises
+        # builds it has no business serialising, and worse, a tree left open.
+        $locks = @(vcpkg_tree_paths | %{ git_lock_path $_ 'inuse' })
+
+        @($locks | select-object -unique).count | should -be $locks.count
+    }
+
+    it 'is the list get-triplets builds its toolkits from' -skip:(-not $IsWindows) {
+        # The two read the same $TOOLKITS so they cannot drift: a toolkit that
+        # gets a tree but no triplets, or triplets but no lock, is the bug this
+        # is here to catch.
+        $tks = @((get-triplets --triplets x64-windows-static).Toolkits | ?{ $_ })
+
+        $tks | should -be @($TOOLKITS | ?{ $_ })
+    }
+}
+
 describe 'acquire_git_lock kinds' {
 
     beforeeach {

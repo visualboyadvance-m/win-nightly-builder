@@ -432,19 +432,26 @@ function add_pack_unit([string]$triplet, [string]$toolkit, [string[]]$packages) 
 # into a single plan under whichever environment that pass has. update-repos
 # asks for this lock without waiting and skips the checkout when a run has it.
 #
-# Only the vcpkg checkout. The overlay is pulled hourly too and moving it
-# mid-run is its own kind of wrong -- half the triplets built against one
-# version of a port and half against the next -- but it holds no host tools, so
-# it cannot produce the cross-triplet plan this is about.
+# It is also what build-nightly.ps1 waits on before it compiles, so this run is
+# not removing a package out of installed/ while that one links against it.
+# That wants every tree this installs into rather than the default checkout
+# alone -- a v143 pass installs into vcpkg-v143 -- so take the set, in the
+# order vcpkg_tree_paths gives it, the same order the nightly asks in.
+#
+# Only vcpkg's own trees. The overlay is pulled hourly too and moving it mid-run
+# is its own kind of wrong -- half the triplets built against one version of a
+# port and half against the next -- but it holds no host tools, so it cannot
+# produce the cross-triplet plan this is about.
 #
 # Released after the packing pass below. Not in a finally: Windows closes an
 # exclusively opened file when the process holding it goes, so a run that dies
 # releases it on the way out, which is the case that matters.
-$vcpkg_tree      = join-path $REPOS_ROOT vcpkg
-$vcpkg_tree_lock = acquire_git_lock $vcpkg_tree -timeout_seconds 0 -kind 'inuse'
+$vcpkg_tree_locks = @(vcpkg_tree_paths | %{
+    [PSCustomObject]@{ Path = $_; Lock = acquire_git_lock $_ -timeout_seconds 0 -kind 'inuse' }
+})
 
-if (-not $vcpkg_tree_lock) {
-    write-warning ("another run is building out of $vcpkg_tree. This one builds against the tree " +
+foreach ($held in @($vcpkg_tree_locks | ?{ -not $_.Lock })) {
+    write-warning ("another run is building out of $($held.Path). This one builds against the tree " +
                    "as it stands and will not update it, and update_vcpkg says the same.")
 }
 
@@ -829,7 +836,7 @@ teardown_build_env
 # The builds are done and the packages are made, so the ports tree is nobody's
 # business now: let the hourly update have it back before the uploads, which
 # take a while and do not touch it.
-release_git_lock $vcpkg_tree_lock
+$vcpkg_tree_locks | %{ release_git_lock $_.Lock }
 
 # Packages sftp could not put, filled in by the upload jobs below.
 $upload_failures = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
