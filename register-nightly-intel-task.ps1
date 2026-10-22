@@ -2,6 +2,17 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 
 $erroractionpreference = 'stop'
 
+# One machine, one nightly task. This one and 'VBAM Nightly' build out of the
+# same checkout and both fire at 23:00, and build-nightly.ps1 decides whether
+# there is anything to build by comparing that checkout's HEAD against
+# origin/master -- so whichever takes the lock first pulls, and the other finds
+# nothing to build and says so in a line that looks like an ordinary quiet
+# night. Through October that cost arm64 five nightlies before anyone noticed,
+# the triplets this task names being a subset of the ones that one builds.
+#
+# So register this only on a machine that builds this subset and nothing else,
+# where there is no other nightly and no shared checkout to race for.
+
 $taskname = 'VBAM Nightly Intel'
 $runat    = '23:00'
 
