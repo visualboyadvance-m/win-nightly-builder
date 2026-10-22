@@ -2,6 +2,9 @@
 Description=Run the VBAM Nightly (Android) daily at 23:00
 
 [Timer]
+# Last of the three staggered jobs: vbam-vcpkg-daily runs 09:00-13:00 and
+# vbam-vcpkg-daily-android 13:00-22:00, so this starts an hour after the
+# widest of those slots ends.
 OnCalendar=*-*-* 23:00:00
 
 [Install]

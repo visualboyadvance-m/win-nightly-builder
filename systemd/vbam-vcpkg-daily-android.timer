@@ -1,8 +1,13 @@
 [Unit]
-Description=Run the VBAM vcpkg Daily Upgrade (Android) daily at 21:00
+Description=Run the VBAM vcpkg Daily Upgrade (Android) daily at 13:00
 
 [Timer]
-OnCalendar=*-*-* 21:00:00
+# The long pole of the three: 8h34m on 09-23, when one run rebuilt qtbase for
+# all six triplets twice. A 13:00 start keeps even that inside the 13:00-22:00
+# slot, an hour clear of vbam-nightly-android at 23:00. A build that configures
+# while this one has qtbase uninstalled fails to find Qt6, which is what the
+# staggering is for; the vcpkg tree lock is what catches an overrun.
+OnCalendar=*-*-* 13:00:00
 
 [Install]
 WantedBy=timers.target
