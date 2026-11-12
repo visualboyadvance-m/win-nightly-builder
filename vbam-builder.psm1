@@ -41,7 +41,19 @@ $REPOS_ROOT     = $ROOT + '/source/repos'
 # the stale copy instead, since a dependency's ABI feeds into ffmpeg's own.
 # Their default features are what ffmpeg asks for (x264's asm and gpl, x265 has
 # none), so naming them bare changes nothing about how they are built.
-$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
+#
+# qtbase and qttools are what ENABLE_QT adds to VCPKG_DEPS -- the Qt 6
+# frontend's whole dependency, with qttools there for lrelease and lupdate --
+# and both are named bare because that is how the emulator asks for them. They
+# were built for the Android triplets alone until now, wxQt being the wx
+# backend there, which left every desktop triplet with no package to restore:
+# a build with ENABLE_QT=ON found no Qt for its triplet and compiled one from
+# source before it could start.
+#
+# They go ahead of wxwidgets rather than at the end because the Android list is
+# built from this one and wx links Qt on that target; see the ordering note in
+# vcpkg-daily.ps1, which installs and upgrades these in the order given.
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl qtbase qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
 
 # The set before any host's desktop additions. $ANDROID_DEP_PORTS is built from
 # this rather than from $DEP_PORTS, which by then carries GTK, X11 and friends.
@@ -71,17 +83,19 @@ $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
 # triplet that has no X server. The vulkan port is fine: it gates the loader on
 # !android by itself, leaving the headers, which is all the NDK needs.
 #
-# The other direction is Qt. wxQt is the wx backend on Android, so the target
-# needs a Qt that no desktop build asks for; naming it here is also what gets
-# the *host* Qt built, since vcpkg records qtbase:<host> as a host dependency
-# of qtbase:*-android and both moc and androiddeployqt run on the build
-# machine. tiff is named for the reason it is on Linux: wx links it, and naming
-# it keeps it upgraded by name instead of only ever arriving transitively.
+# Qt used to be the other direction, named here and nowhere else. It is in the
+# common list now, for the desktop Qt frontend, and Android takes it from there
+# -- wxQt is still the wx backend on this target, and the target's copy is
+# still what gets the *host* Qt built, since vcpkg records qtbase:<host> as a
+# host dependency of qtbase:*-android and both moc and androiddeployqt run on
+# the build machine. tiff is named for the reason it is on Linux: wx links it,
+# and naming it keeps it upgraded by name instead of only ever arriving
+# transitively.
 # SDL3 drops its libusb feature here: on Android the HID backend is the Java one
 # under org/libsdl/app, which the APK carries itself, and the feature only turns
 # on SDL_HIDAPI_LIBUSB. The port is not platform-gated, so asking for it builds
 # libusb for a target that never links it.
-$ANDROID_DEP_PORTS = @('vulkan', 'qtbase', 'qttools', 'tiff') +
+$ANDROID_DEP_PORTS = @('vulkan', 'tiff') +
                      ($COMMON_DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]')
 
 $ANDROID_DEP_PORT_NAMES = $ANDROID_DEP_PORTS -replace '\[[^\]]+\]',''
@@ -1145,9 +1159,11 @@ $script:host_plans = @{}
 #
 # Two things want this. A host triplet builds the Android host halves: moc, rcc
 # and androiddeployqt run on the build machine, so vcpkg builds qtbase and
-# qttools for the host while building them for the target, and no desktop build
-# asks for either -- a host that only ever built the desktop list has no host Qt
-# to hand an Android build that lands on it, and compiles one from source first.
+# qttools for the host while building them for the target. The desktop list
+# names those two itself now, so a host triplet has them whether or not it ever
+# builds for Android; what is still only visible here is the rest of what the
+# cross plan puts on the host -- icu, which arrives under qtbase to cross-build
+# its data, and the script ports.
 # The Android targets themselves are built on Linux and macOS under --android;
 # these are the host halves of that build, wanted on every host the platform
 # defines whether or not that host ever builds the targets. A cross-compiled

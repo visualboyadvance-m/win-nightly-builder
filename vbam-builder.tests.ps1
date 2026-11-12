@@ -1103,6 +1103,32 @@ describe 'get_dep_ports' {
         @(get_dep_ports 'arm64-android' | ?{ $_ -like 'sdl3*' }) |
             should -be @('sdl3[vulkan]')
     }
+
+    it 'gives a desktop triplet the Qt ports' {
+        # ENABLE_QT asks vcpkg for qtbase and qttools, bare. They were built
+        # for Android alone once, which left a desktop Qt build compiling Qt
+        # from source for want of a package to restore.
+        foreach ($t in @('x64-windows', 'x64-windows-static', 'x86-mingw-static')) {
+            $ports = @(get_dep_ports $t)
+
+            $ports | should -contain 'qtbase'
+            $ports | should -contain 'qttools'
+        }
+    }
+
+    it 'names the Qt ports once on Android, before wxwidgets' {
+        # Android takes them from the common list now rather than naming them
+        # itself, and wx links Qt on that target, so they have to come first:
+        # vcpkg-daily.ps1 upgrades each port as it installs it, and a
+        # dependency upgraded afterwards drags its dependents along behind it.
+        $ports = @(get_dep_ports 'arm64-android')
+
+        @($ports | ?{ $_ -eq 'qtbase'  }).Count | should -be 1
+        @($ports | ?{ $_ -eq 'qttools' }).Count | should -be 1
+
+        $ports.IndexOf('qtbase')  | should -belessthan $ports.IndexOf('wxwidgets[core]')
+        $ports.IndexOf('qttools') | should -belessthan $ports.IndexOf('wxwidgets[core]')
+    }
 }
 
 describe 'get_host_dep_ports' {
