@@ -55,6 +55,20 @@ $REPOS_ROOT     = $ROOT + '/source/repos'
 # vcpkg-daily.ps1, which installs and upgrades these in the order given.
 $DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl qtbase qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
 
+# Ports the XP target never gets, whatever the rest of the host list holds.
+#
+# Qt 6 requires Windows 10 1809 or later -- no version of it has ever run on
+# XP -- so a Qt package built for this triplet could not be used by anything.
+# Nor does it build. qtbase takes icu among its default features, and vcpkg's
+# icu port cannot reach i686 from an x86_64 host: its configure stops at
+# "Cross compiling but no --with-cross-build option specified", the port
+# withholding that option on purpose for a mingw target on a Windows host,
+# because the Windows pkgdata writes paths mingw's bash does not read.
+#
+# Moving qtbase and qttools into the common list on 2026-11-12 asked for them
+# here for the first time, and every daily since has failed on them.
+$XP_SKIP_PORTS  = 'qtbase','qttools'
+
 # The set before any host's desktop additions. $ANDROID_DEP_PORTS is built from
 # this rather than from $DEP_PORTS, which by then carries GTK, X11 and friends.
 $COMMON_DEP_PORTS = $DEP_PORTS
@@ -1170,8 +1184,8 @@ function get-triplets {
 }
 
 # The port list a triplet wants: Android takes the cross list, everything else
-# the host's own, and the XP target the host's own without libusb. Callers pass
-# the triplet object or its name.
+# the host's own, and the XP target the host's own without libusb or Qt.
+# Callers pass the triplet object or its name.
 #
 # libusb arrives as SDL3's libusb feature and nothing else asks for it. It
 # imports CancelIoEx and the condition variable API statically, all four of
@@ -1188,7 +1202,28 @@ function get-triplets {
 function get_dep_ports([string]$triplet = '') {
     if ($triplet -match '-android$') { return $ANDROID_DEP_PORTS }
 
-    if ($triplet -match '^x86-mingw') { return @($DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]') }
+    if ($triplet -match '^x86-mingw') {
+	$ports = $DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]'
+
+	return @($ports | ?{ $_ -notin $XP_SKIP_PORTS })
+    }
+
+    # icu named outright, and with its tools, for a mingw target.
+    #
+    # Nothing here asks for icu: it arrives as one of qtbase's default
+    # features. That is enough everywhere else, but not on mingw, where icu
+    # builds its data with its own icupkg -- and vcpkg's port passes
+    # --disable-tools unless something asks for the feature, so icupkg is never
+    # built and the data step stops at "../bin/icupkg: No such file or
+    # directory". Asking for it by name is also what gets it upgraded and
+    # published by name, the way tiff is on Linux.
+    #
+    # Before qtbase, because vcpkg-daily.ps1 upgrades each port as it installs
+    # it and a dependency upgraded after its dependent drags that dependent
+    # along behind it.
+    if ($triplet -match 'mingw') {
+	return @($DEP_PORTS | %{ if ($_ -eq 'qtbase') { 'icu[tools]' }; $_ })
+    }
 
     $DEP_PORTS
 }
@@ -1726,7 +1761,7 @@ function task_action {
 	    " *>> $ROOT/logs/$log")
 }
 
-export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
+export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,XP_SKIP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
 		              installed_package_stamps,archive_build_logs, `
 		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `

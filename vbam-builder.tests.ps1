@@ -1088,15 +1088,58 @@ describe 'get_dep_ports' {
             should -be @('sdl3[vulkan,libusb]')
     }
 
+    it 'drops the Qt ports for the XP target' {
+        # Qt 6 wants Windows 10 1809 or later, so a Qt package for the XP
+        # triplet could not be used even if icu would cross to i686, which it
+        # will not.
+        $xp = @(get_dep_ports 'x86-mingw-static')
+
+        foreach ($port in $XP_SKIP_PORTS) { $xp | should -not -contain $port }
+    }
+
+    it 'keeps the Qt ports everywhere else' {
+        foreach ($port in $XP_SKIP_PORTS) {
+            @(get_dep_ports 'x64-windows-static') | should -contain $port
+            @(get_dep_ports 'x64-mingw-static')   | should -contain $port
+        }
+    }
+
     it 'drops nothing else from the XP list' {
-        # The rewrite must touch the sdl3 entry and no other: everything else
-        # the XP build links is what every other Windows triplet links.
+        # The rewrite must touch the sdl3 entry and the skipped ports and no
+        # others: everything else the XP build links is what every other
+        # Windows triplet links.
         $xp   = @(get_dep_ports 'x86-mingw-static')
         $full = @(get_dep_ports 'x64-windows-static')
 
-        $xp.Count | should -be $full.Count
+        $xp.Count | should -be ($full.Count - @($XP_SKIP_PORTS).Count)
 
-        @($xp | ?{ $_ -notlike 'sdl3*' }) | should -be @($full | ?{ $_ -notlike 'sdl3*' })
+        @($xp | ?{ $_ -notlike 'sdl3*' }) |
+            should -be @($full | ?{ $_ -notlike 'sdl3*' -and $_ -notin $XP_SKIP_PORTS })
+    }
+
+    it 'names icu with its tools for a mingw target' {
+        # qtbase brings icu in as a default feature, but only --enable-tools
+        # builds the icupkg that icu's own data step runs, and the port
+        # disables tools unless something asks. Without this the build stops
+        # at "../bin/icupkg: No such file or directory".
+        @(get_dep_ports 'x64-mingw-static') | should -contain 'icu[tools]'
+    }
+
+    it 'puts icu ahead of the qtbase that wants it' {
+        # vcpkg-daily.ps1 upgrades each port as it installs it, and a
+        # dependency upgraded after its dependent drags that dependent along.
+        $ports = @(get_dep_ports 'x64-mingw-static')
+
+        $ports.IndexOf('icu[tools]') | should -belessthan $ports.IndexOf('qtbase')
+    }
+
+    it 'leaves icu out where nothing asks for it' {
+        # The XP target has no qtbase to want icu, and icu will not cross to
+        # i686 in any case.
+        @(get_dep_ports 'x86-mingw-static') | should -not -contain 'icu[tools]'
+
+        # Everywhere else icu arrives through qtbase and builds without help.
+        @(get_dep_ports 'x64-windows-static') | should -not -contain 'icu[tools]'
     }
 
     it 'still gives an Android triplet the cross list' {
@@ -1108,7 +1151,10 @@ describe 'get_dep_ports' {
         # ENABLE_QT asks vcpkg for qtbase and qttools, bare. They were built
         # for Android alone once, which left a desktop Qt build compiling Qt
         # from source for want of a package to restore.
-        foreach ($t in @('x64-windows', 'x64-windows-static', 'x86-mingw-static')) {
+        #
+        # x86-mingw-static was in this list and is not any more: it is the XP
+        # target, and Qt 6 starts at Windows 10 1809. See $XP_SKIP_PORTS.
+        foreach ($t in @('x64-windows', 'x64-windows-static', 'x64-mingw-static')) {
             $ports = @(get_dep_ports $t)
 
             $ports | should -contain 'qtbase'
