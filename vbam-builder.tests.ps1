@@ -1227,6 +1227,36 @@ describe 'Qt feature sets' {
         }
     }
 
+    it 'keeps the host desktop features out of the Android list' {
+        # Why $ANDROID_QT_FEATURES is built from $COMMON_QT_FEATURES and not
+        # from $QT_FEATURES: the latter carries whatever the running host added
+        # for its own desktop by then. Built from the wrong one, an Android Qt
+        # was asked for xcb, xcb-sm, xcb-xlib, xrender, fontconfig and dbus on
+        # a Linux builder -- an X11 Qt for a device with no X server.
+        foreach ($f in 'windeployqt', 'xcb', 'xcb-sm', 'xcb-xlib', 'xrender',
+                       'fontconfig', 'dbus') {
+            $ANDROID_QT_FEATURES | should -not -contain $f
+        }
+    }
+
+    it 'names no feature twice' {
+        # The same mistake put egl in the Android list twice, once from the
+        # Linux desktop additions and once as Android's own.
+        foreach ($set in $QT_FEATURES, $COMMON_QT_FEATURES, $ANDROID_QT_FEATURES) {
+            @($set).Count | should -be @($set | select -unique).Count
+        }
+    }
+
+    it 'adds nothing to Android beyond GLES' {
+        # Everything Android asks for is either the common set or the two
+        # features that make it draw through GLES.
+        foreach ($f in $ANDROID_QT_FEATURES) {
+            if ($f -in 'egl', 'gles2') { continue }
+
+            $COMMON_QT_FEATURES | should -contain $f
+        }
+    }
+
     it 'reaches the port lists as one spec per triplet' {
         $desktop = @(get_dep_ports 'x64-mingw-static' | ?{ $_ -like 'qtbase*' })
         $android = @(get_dep_ports 'arm64-android'    | ?{ $_ -like 'qtbase*' })

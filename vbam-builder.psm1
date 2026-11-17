@@ -74,6 +74,13 @@ $REPOS_ROOT     = $ROOT + '/source/repos'
 #                              cross-build to i686 at all; see $XP_SKIP_PORTS.
 $QT_FEATURES = 'core','gui','widgets','opengl','network','thread','freetype','harfbuzz','png','jpeg','pcre2','doubleconversion','async-io'
 
+# The set before any host's desktop additions, and what Android is built from.
+# $COMMON_DEP_PORTS exists for the same reason and a few lines further down:
+# Android is a cross target, and what a host adds for its own desktop is not
+# merely useless there but unbuildable -- an Android Qt asked for xcb and
+# fontconfig is a Qt asked to draw through an X server the device has not got.
+$COMMON_QT_FEATURES = $QT_FEATURES
+
 # The platform's own additions, named here for the same reason the rest is:
 # vcpkg rejects a feature whose platform expression excludes the triplet, so
 # each of these can only be asked for where it applies. windeployqt is what
@@ -162,12 +169,15 @@ $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
 #
 # Qt is swapped the same way, and for the same kind of reason. This target
 # draws through GLES rather than desktop GL, so it wants egl and gles2; it
-# links no QTcpSocket, so network goes; and windeployqt is a Windows tool that
-# the port will not even offer here -- the host copy of Qt keeps it, which is
-# the copy androiddeployqt actually runs. concurrent is left unnamed although
+# links no QTcpSocket, so network goes. concurrent is left unnamed although
 # the Android build has it: the port asks for qtbase[concurrent,thread] of
 # itself on this platform, so naming it would only repeat the port.
-$ANDROID_QT_FEATURES = @($QT_FEATURES | ?{ $_ -notin 'network','windeployqt' }) +
+#
+# Built from $COMMON_QT_FEATURES, never from $QT_FEATURES: by here the latter
+# carries whatever the running host added for its own desktop -- windeployqt
+# on Windows, the X11 and fontconfig set on Linux -- and Android wants none of
+# it. Taking the wrong one asked an Android Qt for xcb, and for egl twice.
+$ANDROID_QT_FEATURES = @($COMMON_QT_FEATURES | ?{ $_ -ne 'network' }) +
                        @('egl', 'gles2')
 
 $ANDROID_DEP_PORTS = @('vulkan', 'tiff') +
@@ -1809,7 +1819,7 @@ function task_action {
 	    " *>> $ROOT/logs/$log")
 }
 
-export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,XP_SKIP_PORTS,QT_FEATURES,ANDROID_QT_FEATURES,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
+export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,XP_SKIP_PORTS,QT_FEATURES,COMMON_QT_FEATURES,ANDROID_QT_FEATURES,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
 		              installed_package_stamps,archive_build_logs, `
 		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `
