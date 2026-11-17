@@ -39,6 +39,19 @@ $grep = if ($iswindows) { 'grep.exe' } else {
 # Write date and time for beginning of check/build.
 date
 
+# What produced nothing publishable, and what went wrong for each: a triplet
+# that would not build or stage, or a checkout that could not be fetched.
+#
+# A failure takes its own triplet out of the run and nothing else: the rest are
+# still built, staged and published, since one broken toolchain should not cost
+# a night's nightlies for every other architecture. What it must not do is pass
+# unmentioned, so each one is named again at the end, where the run also stops
+# calling itself successful.
+#
+# Declared before the plan is drawn up, because the first thing that can fail
+# is the fetch the plan is drawn from.
+$build_failures = @()
+
 # What to build, as one entry per triplet naming the checkout it comes out of
 # and whether that checkout has anything but translations to offer. Each
 # checkout is fetched and asked once, however many triplets it carries.
@@ -68,6 +81,21 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
     pushd $repo_path
 
     git fetch --all --prune
+
+    # A fetch that fails leaves origin/master where it was, and the comparison
+    # below then reads as "nothing new". When the disk filled on 2026-11-13
+    # that is exactly what happened: "fatal: unable to write loose object file:
+    # No space left on device", then "INFO: No changes to build", a line no
+    # different from a quiet night's, and a nightly silently skipped. What this
+    # checkout should have built cannot be known from here, so the run drops it
+    # and says why.
+    if ($LASTEXITCODE -ne 0) {
+	$build_failures += "${repo_name}: git fetch exited $LASTEXITCODE"
+	write-warning "${repo_name}: git fetch exited $LASTEXITCODE, skipping it"
+	popd
+	release_git_lock $repo_lock
+	continue
+    }
     git submodule update --init --recursive
     git submodule update
 
@@ -170,15 +198,6 @@ $vcpkg_tree_locks = @(vcpkg_tree_paths | %{
 })
 
 "INFO: Build started on $(date)."
-
-# Triplets that produced nothing publishable, and what went wrong for each.
-#
-# A failure takes its own triplet out of the run and nothing else: the rest are
-# still built, staged and published, since one broken toolchain should not cost
-# a night's nightlies for every other architecture. What it must not do is pass
-# unmentioned, so each one is named again at the end, where the run also stops
-# calling itself successful.
-$build_failures = @()
 
 foreach ($item in $plan) {
     $triplet   = $item.triplet
@@ -286,7 +305,22 @@ foreach ($item in $plan) {
 	continue
     }
 
-    cpi -fo $found $stage_dir
+    # A copy that cannot finish throws instead of writing an error record, so
+    # nothing after it runs -- not the rest of the triplets, and not the report
+    # naming them. On 2026-11-10 a full disk ended the run here, two triplets
+    # into their own failures, and the only sign left was a stack trace. One
+    # triplet that cannot be staged is no more fatal to the others than one
+    # that cannot be built. -ea stop so that a failure which would only write
+    # an error record ends up in the same place, rather than staging nothing
+    # and leaving the upload to find out.
+    try {
+	cpi -fo $found $stage_dir -ea stop
+    }
+    catch {
+	$build_failures += "$($item.triplet): could not stage ${artifacts}: $($_.exception.message)"
+	write-warning "$($item.triplet): could not stage ${artifacts}: $($_.exception.message)"
+	continue
+    }
 }
 
 pushd $stage_dir
