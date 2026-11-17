@@ -49,6 +49,10 @@ if not "%EXITCODE%"=="0" exit /b %EXITCODE%
 if exist "$($script:mock_response)" call "$($script:mock_response)"
 "@ | set-content $script:mock_vcvarsall -encoding ascii
 
+    # $DEP_PORTS holds install specs, and one carrying a feature set --
+    # qtbase does -- is not equal to its own bare name. Compare on the name.
+    function script:port_names($ports) { @(@($ports) -replace '\[[^\]]+\]', '') }
+
     function script:set_mock_output {
         param([string[]]$lines = @(), [int]$exit_code = 0)
 
@@ -1090,17 +1094,16 @@ describe 'get_dep_ports' {
 
     it 'drops the Qt ports for the XP target' {
         # Qt 6 wants Windows 10 1809 or later, so a Qt package for the XP
-        # triplet could not be used even if icu would cross to i686, which it
-        # will not.
-        $xp = @(get_dep_ports 'x86-mingw-static')
+        # triplet could not be used by anything that runs there.
+        $xp = port_names (get_dep_ports 'x86-mingw-static')
 
         foreach ($port in $XP_SKIP_PORTS) { $xp | should -not -contain $port }
     }
 
     it 'keeps the Qt ports everywhere else' {
         foreach ($port in $XP_SKIP_PORTS) {
-            @(get_dep_ports 'x64-windows-static') | should -contain $port
-            @(get_dep_ports 'x64-mingw-static')   | should -contain $port
+            port_names (get_dep_ports 'x64-windows-static') | should -contain $port
+            port_names (get_dep_ports 'x64-mingw-static')   | should -contain $port
         }
     }
 
@@ -1114,32 +1117,21 @@ describe 'get_dep_ports' {
         $xp.Count | should -be ($full.Count - @($XP_SKIP_PORTS).Count)
 
         @($xp | ?{ $_ -notlike 'sdl3*' }) |
-            should -be @($full | ?{ $_ -notlike 'sdl3*' -and $_ -notin $XP_SKIP_PORTS })
+            should -be @($full | ?{ $_ -notlike 'sdl3*' -and
+                                    ($_ -replace '\[[^\]]+\]', '') -notin $XP_SKIP_PORTS })
     }
 
-    it 'names icu with its tools for a mingw target' {
-        # qtbase brings icu in as a default feature, but only --enable-tools
-        # builds the icupkg that icu's own data step runs, and the port
-        # disables tools unless something asks. Without this the build stops
-        # at "../bin/icupkg: No such file or directory".
-        @(get_dep_ports 'x64-mingw-static') | should -contain 'icu[tools]'
-    }
-
-    it 'puts icu ahead of the qtbase that wants it' {
-        # vcpkg-daily.ps1 upgrades each port as it installs it, and a
-        # dependency upgraded after its dependent drags that dependent along.
-        $ports = @(get_dep_ports 'x64-mingw-static')
-
-        $ports.IndexOf('icu[tools]') | should -belessthan $ports.IndexOf('qtbase')
-    }
-
-    it 'leaves icu out where nothing asks for it' {
-        # The XP target has no qtbase to want icu, and icu will not cross to
-        # i686 in any case.
-        @(get_dep_ports 'x86-mingw-static') | should -not -contain 'icu[tools]'
-
-        # Everywhere else icu arrives through qtbase and builds without help.
-        @(get_dep_ports 'x64-windows-static') | should -not -contain 'icu[tools]'
+    it 'leaves icu out of every list' {
+        # icu is not in $QT_FEATURES, so nothing pulls it in and nothing has to
+        # name it. It was named once, with its tools, because qtbase took it as
+        # a default feature and icu's data step runs an icupkg that the port
+        # only builds when the tools feature is asked for -- and on the XP
+        # target it could not be built at all, icu's configure stopping at
+        # "Cross compiling but no --with-cross-build option specified".
+        foreach ($t in @('x86-mingw-static', 'x64-mingw-static',
+                         'x64-windows-static', 'arm64-android')) {
+            @(get_dep_ports $t | ?{ $_ -like 'icu*' }) | should -beNullOrEmpty
+        }
     }
 
     it 'still gives an Android triplet the cross list' {
@@ -1148,14 +1140,14 @@ describe 'get_dep_ports' {
     }
 
     it 'gives a desktop triplet the Qt ports' {
-        # ENABLE_QT asks vcpkg for qtbase and qttools, bare. They were built
-        # for Android alone once, which left a desktop Qt build compiling Qt
-        # from source for want of a package to restore.
+        # ENABLE_QT asks vcpkg for qtbase and qttools. They were built for
+        # Android alone once, which left a desktop Qt build compiling Qt from
+        # source for want of a package to restore.
         #
         # x86-mingw-static was in this list and is not any more: it is the XP
         # target, and Qt 6 starts at Windows 10 1809. See $XP_SKIP_PORTS.
         foreach ($t in @('x64-windows', 'x64-windows-static', 'x64-mingw-static')) {
-            $ports = @(get_dep_ports $t)
+            $ports = port_names (get_dep_ports $t)
 
             $ports | should -contain 'qtbase'
             $ports | should -contain 'qttools'
@@ -1167,13 +1159,80 @@ describe 'get_dep_ports' {
         # itself, and wx links Qt on that target, so they have to come first:
         # vcpkg-daily.ps1 upgrades each port as it installs it, and a
         # dependency upgraded afterwards drags its dependents along behind it.
-        $ports = @(get_dep_ports 'arm64-android')
+        $ports = port_names (get_dep_ports 'arm64-android')
 
         @($ports | ?{ $_ -eq 'qtbase'  }).Count | should -be 1
         @($ports | ?{ $_ -eq 'qttools' }).Count | should -be 1
 
-        $ports.IndexOf('qtbase')  | should -belessthan $ports.IndexOf('wxwidgets[core]')
-        $ports.IndexOf('qttools') | should -belessthan $ports.IndexOf('wxwidgets[core]')
+        $ports.IndexOf('qtbase')  | should -belessthan $ports.IndexOf('wxwidgets')
+        $ports.IndexOf('qttools') | should -belessthan $ports.IndexOf('wxwidgets')
+    }
+}
+
+describe 'Qt feature sets' {
+    it 'turns the port default feature set off' {
+        # `core` is the token that does it. Without it every name below is an
+        # addition to vcpkg's defaults rather than the whole of what gets
+        # built, and the ports this list exists to exclude come back.
+        $QT_FEATURES         | should -contain 'core'
+        $ANDROID_QT_FEATURES | should -contain 'core'
+    }
+
+    it 'names what the Qt frontend links' {
+        # src/qt/CMakeLists.txt asks find_package for Core, Gui, Widgets,
+        # OpenGL, OpenGLWidgets, Network and PrintSupport. PrintSupport has no
+        # feature of its own and arrives with widgets; OpenGLWidgets arrives
+        # with opengl.
+        foreach ($f in 'gui', 'widgets', 'opengl', 'network') {
+            $QT_FEATURES | should -contain $f
+        }
+    }
+
+    it 'leaves out everything nothing links' {
+        # Each of these was checked against the emulator's source before it
+        # came out. sql-psql is the one that mattered: it brings in libpq,
+        # which does not compile under the clang the mingw triplets use.
+        foreach ($f in 'sql', 'sql-psql', 'sql-sqlite', 'icu', 'openssl',
+                       'testlib', 'concurrent', 'dnslookup', 'sessionmanager',
+                       'brotli', 'zstd') {
+            $QT_FEATURES         | should -not -contain $f
+            $ANDROID_QT_FEATURES | should -not -contain $f
+        }
+    }
+
+    it 'gives Android GLES instead of the desktop extras' {
+        # src/wx links Core, Gui, Widgets, PrintSupport and, under ENABLE_GLES,
+        # OpenGLWidgets. It opens no socket, and windeployqt is a Windows tool
+        # that belongs to the host copy of Qt, which is the one that runs.
+        $ANDROID_QT_FEATURES | should -contain 'egl'
+        $ANDROID_QT_FEATURES | should -contain 'gles2'
+
+        $ANDROID_QT_FEATURES | should -not -contain 'network'
+        $ANDROID_QT_FEATURES | should -not -contain 'windeployqt'
+    }
+
+    it 'asks the platform for what only the platform has' {
+        # vcpkg rejects a feature whose platform expression excludes the
+        # triplet, so these can only be named where they apply.
+        if ($iswindows) {
+            $QT_FEATURES | should -contain 'windeployqt'
+            $QT_FEATURES | should -not -contain 'xcb'
+        }
+        elseif ($islinux) {
+            # Without these Qt builds a copy that cannot open a window.
+            foreach ($f in 'xcb', 'xcb-sm', 'xcb-xlib', 'xrender', 'fontconfig') {
+                $QT_FEATURES | should -contain $f
+            }
+            $QT_FEATURES | should -not -contain 'windeployqt'
+        }
+    }
+
+    it 'reaches the port lists as one spec per triplet' {
+        $desktop = @(get_dep_ports 'x64-mingw-static' | ?{ $_ -like 'qtbase*' })
+        $android = @(get_dep_ports 'arm64-android'    | ?{ $_ -like 'qtbase*' })
+
+        $desktop | should -be @("qtbase[$($QT_FEATURES -join ',')]")
+        $android | should -be @("qtbase[$($ANDROID_QT_FEATURES -join ',')]")
     }
 }
 

@@ -42,9 +42,53 @@ $REPOS_ROOT     = $ROOT + '/source/repos'
 # Their default features are what ffmpeg asks for (x264's asm and gpl, x265 has
 # none), so naming them bare changes nothing about how they are built.
 #
+# What the emulator links out of Qt, named outright instead of taking vcpkg's
+# default feature set. `core` is the token that turns the defaults off; every
+# other name here has to earn its place.
+#
+# src/qt/CMakeLists.txt asks find_package for Core, Gui, Widgets, OpenGL,
+# OpenGLWidgets, Network and PrintSupport; src/wx wants Core, Gui, Widgets,
+# PrintSupport and, under ENABLE_GLES, OpenGLWidgets. PrintSupport has no
+# feature of its own -- it arrives with widgets -- and OpenGLWidgets arrives
+# with opengl. freetype, harfbuzz, png and jpeg are what draws that GUI's text
+# and icons; pcre2, doubleconversion, thread and async-io are QtCore's own.
+#
+# What is deliberately not here, each checked against the source first:
+#
+#   sql, sql-sqlite, sql-psql  the emulator opens no database. sql-psql is also
+#                              how libpq got into the graph, and libpq does not
+#                              compile under the clang the mingw triplets use:
+#                              PostgreSQL maps sigsetjmp onto __builtin_setjmp,
+#                              whose void** argument clang 16 and later reject
+#                              outright rather than warn about.
+#   testlib                    Qt6::Test appears in one comment and nowhere else.
+#   concurrent, dnslookup      no QtConcurrent, QFuture or QDnsLookup anywhere.
+#   sessionmanager             no QSessionManager. Linux takes it anyway, under
+#                              xcb-sm, which asks for it by name.
+#   openssl, brotli            the only sockets are the plain QTcpSocket of the
+#                              GDB remote and the link cable. No TLS, no
+#                              QNetworkAccessManager, so nothing to decompress.
+#   zstd                       nothing compresses a resource with it.
+#   icu                        a very large port Qt wants for collation that
+#                              nothing here asks for -- and the one that cannot
+#                              cross-build to i686 at all; see $XP_SKIP_PORTS.
+$QT_FEATURES = 'core','gui','widgets','opengl','network','thread','freetype','harfbuzz','png','jpeg','pcre2','doubleconversion','async-io'
+
+# The platform's own additions, named here for the same reason the rest is:
+# vcpkg rejects a feature whose platform expression excludes the triplet, so
+# each of these can only be asked for where it applies. windeployqt is what
+# puts the Qt DLLs beside the executable; the X11 and fontconfig set is how Qt
+# opens a window on Linux at all, and leaving it out builds a Qt that cannot.
+if ($iswindows) {
+    $QT_FEATURES += 'windeployqt'
+}
+elseif ($islinux) {
+    $QT_FEATURES += 'dbus','egl','fontconfig','xcb','xcb-sm','xcb-xlib','xrender'
+}
+
 # qtbase and qttools are what ENABLE_QT adds to VCPKG_DEPS -- the Qt 6
 # frontend's whole dependency, with qttools there for lrelease and lupdate --
-# and both are named bare because that is how the emulator asks for them. They
+# and qttools is named bare because that is how the emulator asks for it. They
 # were built for the Android triplets alone until now, wxQt being the wx
 # backend there, which left every desktop triplet with no package to restore:
 # a build with ENABLE_QT=ON found no Qt for its triplet and compiled one from
@@ -53,20 +97,26 @@ $REPOS_ROOT     = $ROOT + '/source/repos'
 # They go ahead of wxwidgets rather than at the end because the Android list is
 # built from this one and wx links Qt on that target; see the ordering note in
 # vcpkg-daily.ps1, which installs and upgrades these in the order given.
-$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl qtbase qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
+#
+# qtbase is named with its features rather than bare, and $QT_FEATURES just
+# above is where they are chosen and why.
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
 
 # Ports the XP target never gets, whatever the rest of the host list holds.
 #
 # Qt 6 requires Windows 10 1809 or later -- no version of it has ever run on
-# XP -- so a Qt package built for this triplet could not be used by anything.
-# Nor does it build. qtbase takes icu among its default features, and vcpkg's
-# icu port cannot reach i686 from an x86_64 host: its configure stops at
-# "Cross compiling but no --with-cross-build option specified", the port
-# withholding that option on purpose for a mingw target on a Windows host,
-# because the Windows pkgdata writes paths mingw's bash does not read.
+# XP -- so a Qt package built for this triplet could not be used by anything,
+# and that alone is the reason this list exists.
 #
-# Moving qtbase and qttools into the common list on 2026-11-12 asked for them
-# here for the first time, and every daily since has failed on them.
+# It could not be built either, which is how the problem announced itself.
+# qtbase took icu among its default features, and vcpkg's icu port cannot
+# reach i686 from an x86_64 host: its configure stops at "Cross compiling but
+# no --with-cross-build option specified", the port withholding that option on
+# purpose for a mingw target on a Windows host, because the Windows pkgdata
+# writes paths mingw's bash does not read. Moving qtbase and qttools into the
+# common list on 2026-11-12 asked for them here for the first time, and every
+# daily between then and 2026-11-17 failed on them. That half is history now:
+# icu is not in $QT_FEATURES, so nothing asks i686 to build it.
 $XP_SKIP_PORTS  = 'qtbase','qttools'
 
 # The set before any host's desktop additions. $ANDROID_DEP_PORTS is built from
@@ -109,8 +159,21 @@ $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
 # under org/libsdl/app, which the APK carries itself, and the feature only turns
 # on SDL_HIDAPI_LIBUSB. The port is not platform-gated, so asking for it builds
 # libusb for a target that never links it.
+#
+# Qt is swapped the same way, and for the same kind of reason. This target
+# draws through GLES rather than desktop GL, so it wants egl and gles2; it
+# links no QTcpSocket, so network goes; and windeployqt is a Windows tool that
+# the port will not even offer here -- the host copy of Qt keeps it, which is
+# the copy androiddeployqt actually runs. concurrent is left unnamed although
+# the Android build has it: the port asks for qtbase[concurrent,thread] of
+# itself on this platform, so naming it would only repeat the port.
+$ANDROID_QT_FEATURES = @($QT_FEATURES | ?{ $_ -notin 'network','windeployqt' }) +
+                       @('egl', 'gles2')
+
 $ANDROID_DEP_PORTS = @('vulkan', 'tiff') +
-                     ($COMMON_DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]')
+                     ($COMMON_DEP_PORTS `
+                         -replace '^sdl3\[.*\]$', 'sdl3[vulkan]' `
+                         -replace '^qtbase\[.*\]$', "qtbase[$($ANDROID_QT_FEATURES -join ',')]")
 
 $ANDROID_DEP_PORT_NAMES = $ANDROID_DEP_PORTS -replace '\[[^\]]+\]',''
 
@@ -1205,24 +1268,9 @@ function get_dep_ports([string]$triplet = '') {
     if ($triplet -match '^x86-mingw') {
 	$ports = $DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]'
 
-	return @($ports | ?{ $_ -notin $XP_SKIP_PORTS })
-    }
-
-    # icu named outright, and with its tools, for a mingw target.
-    #
-    # Nothing here asks for icu: it arrives as one of qtbase's default
-    # features. That is enough everywhere else, but not on mingw, where icu
-    # builds its data with its own icupkg -- and vcpkg's port passes
-    # --disable-tools unless something asks for the feature, so icupkg is never
-    # built and the data step stops at "../bin/icupkg: No such file or
-    # directory". Asking for it by name is also what gets it upgraded and
-    # published by name, the way tiff is on Linux.
-    #
-    # Before qtbase, because vcpkg-daily.ps1 upgrades each port as it installs
-    # it and a dependency upgraded after its dependent drags that dependent
-    # along behind it.
-    if ($triplet -match 'mingw') {
-	return @($DEP_PORTS | %{ if ($_ -eq 'qtbase') { 'icu[tools]' }; $_ })
+	# Matched on the port name alone: the list holds names, and an entry here
+	# may carry a feature set -- qtbase does -- which would never equal one.
+	return @($ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $XP_SKIP_PORTS })
     }
 
     $DEP_PORTS
@@ -1761,7 +1809,7 @@ function task_action {
 	    " *>> $ROOT/logs/$log")
 }
 
-export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,XP_SKIP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
+export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,XP_SKIP_PORTS,QT_FEATURES,ANDROID_QT_FEATURES,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
 		              installed_package_stamps,archive_build_logs, `
 		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `
