@@ -142,6 +142,7 @@ $whole_run = is_whole_run @($build_triplets | %{ "$_" }) $packages $skip_package
 
 
 "INFO: vcpkg packages upgrade started on $(date)."
+report_free_space $REPOS_ROOT
 
 # set-content ends lines the way the platform does, so a Windows builder
 # rewriting a port file turns every line of it CRLF: the whole file reads as

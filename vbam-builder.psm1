@@ -688,6 +688,62 @@ function vcpkg_tree_paths() {
     @($root) + @($TOOLKITS | ?{ $_ } | sort-object | %{ "$root-$_" })
 }
 
+# Below this many gigabytes free, a run says so before it starts.
+#
+# Not a limit anyone chose by measuring: it is a few times what one night's
+# builds need, picked so the warning comes while there is still room to act.
+$LOW_DISK_GB = 50
+
+# Free space on the volume holding $path, in gigabytes, or $null where the
+# question cannot be answered -- a path on no volume this process can see, or
+# a platform where DriveInfo declines. A caller that cannot get a number
+# carries on: this is here to explain a failure, never to cause one.
+function free_space_gb([string]$path) {
+    try {
+	$root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($path))
+
+	if (-not $root) { return $null }
+
+	$drive = [IO.DriveInfo]::new($root)
+
+	# A volume that is not there answers 0 bytes free rather than throwing,
+	# and 0 would read as a disk about to fill instead of a question with no
+	# answer -- a warning on every run, about nothing.
+	if (-not $drive.IsReady) { return $null }
+
+	[math]::Round($drive.AvailableFreeSpace / 1GB, 1)
+    }
+    catch {
+	$null
+    }
+}
+
+# One line in the log saying how much room there is, and a warning when there
+# is little.
+#
+# A disk that fills does not announce itself. It surfaces as whatever the next
+# write happened to be -- a linker saying "final link failed", a git fetch that
+# wrote no object and so found nothing new, a copy into the staging directory
+# that threw -- each of them looking like a fault in the thing that reported
+# it. Between 2026-11-10 and 2026-11-14 that cost five nights of nightlies, a
+# half-applied checkout in the vcpkg tree and four days of x86 and arm64
+# builds, and nothing in any log said "the disk is full" until someone went
+# looking. So every run now records the number it started with.
+function report_free_space([string]$path) {
+    $free = free_space_gb $path
+
+    if ($null -eq $free) { return }
+
+    "INFO: $free GB free on $([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($path)))"
+
+    if ($free -lt $LOW_DISK_GB) {
+	write-warning ("only $free GB free, under the $LOW_DISK_GB GB this expects to " +
+		       "have room to work in; a run that fills the disk fails in " +
+		       "whatever it was writing at the time, which is rarely where " +
+		       "the problem is")
+    }
+}
+
 function release_git_lock($lock) {
     if (-not $lock) { return }
 
@@ -1670,11 +1726,12 @@ function task_action {
 	    " *>> $ROOT/logs/$log")
 }
 
-export-modulemember -variable ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
+export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
 		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
 		              installed_package_stamps,archive_build_logs, `
 		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `
 		              is_whole_run,git_lock_path,holds_git_lock,vcpkg_tree_paths, `
+		              free_space_gb,report_free_space, `
 		              task_action,vcpkg_run,git_run, `
 		              update_git_checkout,acquire_git_lock,release_git_lock `
 		    -alias vcpkg

@@ -1752,4 +1752,34 @@ describe 'acquire_git_lock kinds' {
     }
 }
 
+describe 'free_space_gb' {
+
+    it 'answers with a positive number for a path that exists' {
+        $free = free_space_gb $REPOS_ROOT
+
+        $free | should -not -be $null
+        $free | should -begreaterthan 0
+    }
+
+    it 'answers $null rather than throwing for a volume there is none of' -skip:(-not $IsWindows) {
+        # The callers log what this returns and carry on either way. A run must
+        # not die reporting its disk, which is the one thing it is doing when
+        # the disk is the problem.
+        free_space_gb 'Q:\no\such\volume' | should -be $null
+    }
+}
+
+describe 'report_free_space' {
+
+    it 'records the number and the volume it is for' {
+        $out = @(report_free_space $REPOS_ROOT 3>$null)
+
+        ($out -join "`n") | should -match 'INFO: [0-9.]+ GB free on '
+    }
+
+    it 'says nothing at all when there is no number to be had' -skip:(-not $IsWindows) {
+        @(report_free_space 'Q:\no\such\volume' 3>$null) | should -benullorempty
+    }
+}
+
 # vim:set sw=4 et:

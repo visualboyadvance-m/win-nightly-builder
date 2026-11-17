@@ -198,6 +198,7 @@ $vcpkg_tree_locks = @(vcpkg_tree_paths | %{
 })
 
 "INFO: Build started on $(date)."
+report_free_space $REPOS_ROOT
 
 foreach ($item in $plan) {
     $triplet   = $item.triplet
