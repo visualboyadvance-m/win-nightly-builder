@@ -106,7 +106,9 @@ elseif ($islinux) {
 # vcpkg-daily.ps1, which installs and upgrades these in the order given.
 #
 # qtbase is named with its features rather than bare, and $QT_FEATURES just
-# above is where they are chosen and why.
+# above is where they are chosen and why. The host triplets are the one
+# exception and keep the port's defaults; get_dep_ports below is where that
+# happens, with the reason.
 $DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
 
 # Ports the XP target never gets, whatever the rest of the host list holds.
@@ -1257,7 +1259,8 @@ function get-triplets {
 }
 
 # The port list a triplet wants: Android takes the cross list, everything else
-# the host's own, and the XP target the host's own without libusb or Qt.
+# the host's own, the XP target the host's own without libusb or Qt, and a host
+# triplet the host's own with the full Qt rather than the trimmed one.
 # Callers pass the triplet object or its name.
 #
 # libusb arrives as SDL3's libusb feature and nothing else asks for it. It
@@ -1281,6 +1284,30 @@ function get_dep_ports([string]$triplet = '') {
 	# Matched on the port name alone: the list holds names, and an entry here
 	# may carry a feature set -- qtbase does -- which would never equal one.
 	return @($ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $XP_SKIP_PORTS })
+    }
+
+    # A host triplet keeps vcpkg's default Qt instead of the trimmed one.
+    # x64-windows and its siblings are build targets in their own right --
+    # people build the emulator on them from these very packages -- and the
+    # same copy is what every cross build borrows moc, rcc and androiddeployqt
+    # from. Trimming it would save disk on the builder and take features away
+    # from everyone downstream.
+    #
+    # It already came out that way, but only by accident of order: $TRIPLETS
+    # puts the two mingw passes first, their host edge builds qtbase for the
+    # host with the defaults, and the trimmed request on this triplet's own
+    # pass is then a subset of what is installed, which vcpkg calls already
+    # installed and leaves alone. Reorder $TRIPLETS and the host copy quietly
+    # narrows. Naming it here says it outright.
+    #
+    # Bare rather than spelled out, because bare is exactly "whatever the port
+    # calls default" and tracks upstream instead of being a second feature list
+    # to keep in sync. And here rather than in $HOST_DEP_PORTS: that list is
+    # build tooling, and it is *added* to this one, so a qtbase in it would
+    # name the port twice in one install command with two feature sets, which
+    # only has vcpkg rebuild it back and forth.
+    if ("$triplet" -in $HOST_TRIPLETS) {
+	return @($DEP_PORTS -replace '^qtbase\[.*\]$', 'qtbase')
     }
 
     $DEP_PORTS
