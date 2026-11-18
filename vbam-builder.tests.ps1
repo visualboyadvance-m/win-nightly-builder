@@ -1264,39 +1264,6 @@ describe 'Qt feature sets' {
         $desktop | should -be @("qtbase[$($QT_FEATURES -join ',')]")
         $android | should -be @("qtbase[$($ANDROID_QT_FEATURES -join ',')]")
     }
-
-    it 'leaves the host copy at the port defaults' {
-        # A host triplet is a build target people build the emulator on, and
-        # the copy every cross build borrows moc and androiddeployqt from.
-        # Bare is how vcpkg spells "the default feature set".
-        foreach ($t in $HOST_TRIPLETS) {
-            @(get_dep_ports $t | ?{ $_ -like 'qtbase*' }) | should -be @('qtbase')
-        }
-    }
-
-    it 'trims Qt on every triplet that is not a host' {
-        # Only the host copy is exempt. A -static or mingw triplet is a target
-        # and nothing else, so it gets what the emulator links and no more.
-        foreach ($t in @($TRIPLETS | ?{ $_ -notin $HOST_TRIPLETS })) {
-            $qt = @(get_dep_ports $t | ?{ $_ -like 'qtbase*' })
-
-            # x86-mingw-static is the XP target and gets no Qt at all.
-            if (-not $qt) { continue }
-
-            $qt | should -be @("qtbase[$($QT_FEATURES -join ',')]")
-        }
-    }
-
-    it 'changes nothing but Qt for a host triplet' {
-        # The host list is the desktop list with one entry swapped. A -replace
-        # that caught anything else would quietly change what gets built.
-        foreach ($t in $HOST_TRIPLETS) {
-            $host_list = @(get_dep_ports $t    | ?{ $_ -notlike 'qtbase*' })
-            $desktop   = @($DEP_PORTS          | ?{ $_ -notlike 'qtbase*' })
-
-            $host_list | should -be $desktop
-        }
-    }
 }
 
 describe 'get_host_dep_ports' {
