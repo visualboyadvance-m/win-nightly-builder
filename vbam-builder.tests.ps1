@@ -903,6 +903,22 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
 
 describe 'get-triplets' {
 
+    it 'builds the host triplet before anything else' {
+        # vcpkg installs a host dependency with the port's default features,
+        # and install never compares the features of a package already there.
+        # Whichever pass reaches the host copy first decides what it holds, so
+        # its own pass has to be the first one.
+        $out = @(get-triplets | %{ "$_" })
+
+        $out[0] | should -be (get_host_triplet)
+    }
+
+    it 'puts it first however the triplets were named' {
+        $out = @(get-triplets --triplets "x64-windows-static,$(get_host_triplet)" | %{ "$_" })
+
+        $out[0] | should -be (get_host_triplet)
+    }
+
     describe 'toolkit selection' {
 
         it 'builds only the named toolkit with --toolkit' {
@@ -993,7 +1009,14 @@ describe 'get-triplets' {
         it 'falls back to $TRIPLETS when none are named' {
             # $TRIPLETS is deliberately not exported, so that callers have to
             # come through get-triplets; read it from the module's own scope.
+            #
+            # The same set, in the same order, except that the host triplet is
+            # moved to the front -- see 'builds the host triplet before
+            # anything else' above for why it has to be.
             $expected = & $script:vbam { $TRIPLETS }
+            $host_t   = get_host_triplet
+            $expected = @($host_t) + @($expected | ?{ $_ -ne $host_t })
+
             @(get-triplets | %{ "$_" }) | should -be @($expected)
         }
     }
@@ -1254,6 +1277,21 @@ describe 'Qt feature sets' {
             if ($f -in 'egl', 'gles2') { continue }
 
             $COMMON_QT_FEATURES | should -contain $f
+        }
+    }
+
+    it 'gives every triplet the same trimmed spec' {
+        # No triplet is exempt. The packages published for a desktop host
+        # carry what the emulator links, the same as the cross targets do,
+        # and the host copy gets that set by being built before the passes
+        # that would otherwise pull it in with the port's defaults.
+        foreach ($t in $TRIPLETS) {
+            $qt = @(get_dep_ports $t | ?{ $_ -like 'qtbase*' })
+
+            # x86-mingw-static is the XP target and gets no Qt at all.
+            if (-not $qt) { continue }
+
+            $qt | should -be @("qtbase[$($QT_FEATURES -join ',')]")
         }
     }
 

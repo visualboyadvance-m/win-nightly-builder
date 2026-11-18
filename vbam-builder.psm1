@@ -1229,6 +1229,28 @@ function get-triplets {
         $requested_triplets = @($requested_triplets) + @($ANDROID_TRIPLETS) | select -unique
     }
 
+    # The host triplet goes first, whatever order it was named in.
+    #
+    # A cross build takes part of itself from the host -- moc, rcc and
+    # androiddeployqt run on the build machine, so qtbase:<host> is a host
+    # dependency of qtbase:<target> -- and vcpkg installs a host dependency
+    # with the port's *default* features, not with anything $DEP_PORTS says.
+    # install then treats a package as satisfied once one of that name is
+    # installed for the triplet, never comparing features, so whichever pass
+    # reaches the host copy first decides what it holds until someone removes
+    # it by hand.
+    #
+    # Built after the two mingw passes, as it was, qtbase:x64-windows came out
+    # with the entire default feature set -- icu, libpq, openssl, testlib --
+    # and the trimmed request on its own pass read as already installed and
+    # changed nothing. Built first, the list's own spec is what lands, and the
+    # cross passes find it there and leave it alone.
+    $host_t = get_host_triplet
+
+    if ("$host_t" -in @($requested_triplets)) {
+	$requested_triplets = @($host_t) + @($requested_triplets | ?{ $_ -ne $host_t })
+    }
+
     # Every triplet actually about to be built has to support the toolkit that
     # was asked for. Naming one that does not is a mistake worth stopping on
     # rather than building under a toolkit that means nothing to it: only the
