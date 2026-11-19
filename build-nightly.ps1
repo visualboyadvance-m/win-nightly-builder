@@ -229,11 +229,22 @@ foreach ($item in $plan) {
 		   -G Ninja
     }
     else {
-	$compiler = if ($triplet -match 'mingw') { 'gcc' } else { (get-command cl).source }
+	# The C and the C++ compiler are named separately because on mingw they
+	# are not the same program. gcc compiles a .cpp happily but is not a
+	# C++ driver: it does not link the C++ runtime, and it is the driver
+	# that runs the LTO link for the Windows XP release build. cl is both.
+	if ($triplet -match 'mingw') {
+	    $c_compiler   = 'gcc'
+	    $cxx_compiler = 'g++'
+	}
+	else {
+	    $c_compiler   = (get-command cl).source
+	    $cxx_compiler = $c_compiler
+	}
 
 	& cmake .. -DVCPKG_TARGET_TRIPLET="$triplet" -DCMAKE_BUILD_TYPE=Release -DUPSTREAM_RELEASE=TRUE `
 		   -DTRANSLATIONS_ONLY="$translations_only_str" -DBUILD_TESTING=FALSE `
-		   -DCMAKE_C_COMPILER="$compiler" -DCMAKE_CXX_COMPILER="$compiler" `
+		   -DCMAKE_C_COMPILER="$c_compiler" -DCMAKE_CXX_COMPILER="$cxx_compiler" `
 		   -G Ninja
     }
 
