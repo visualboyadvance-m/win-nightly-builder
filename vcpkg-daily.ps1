@@ -29,9 +29,10 @@ if (-not (get-command start-threadjob -ea ignore)) {
 $stage_root = "$env:TEMP/vbam-daily-packages"
 $stage_dir  = "$stage_root/$PID"
 
-$packages      = $null
-$skip_packages = @()
-$filtered_args = @()
+$packages          = $null
+$skip_packages     = @()
+$disable_wx_update = $false
+$filtered_args     = @()
 for ($i = 0; $i -lt $args.count; $i++) {
     if     ($args[$i] -match '^--?packages?=(.+)')          { $packages      = @($matches[1] -split '[,\s]+' | ?{ $_ }) }
     elseif ($args[$i] -match '^--?packages?$')              {
@@ -43,6 +44,7 @@ for ($i = 0; $i -lt $args.count; $i++) {
         $skip_packages = @()
         while ($i+1 -lt $args.count -and $args[$i+1] -notmatch '^-') { $skip_packages += $args[++$i] -split '[,\s]+' | ?{ $_ } }
     }
+    elseif ($args[$i] -match '^--?disable[-_]?wx[-_]?update$') { $disable_wx_update = $true }
     else   { $filtered_args += $args[$i] }
 }
 
@@ -188,7 +190,17 @@ function wx_submodule_sha([string]$wx_sha, [string]$path) {
     $info.sha
 }
 
-if ('wxwidgets' -in $selected_port_names) {
+# --disable-wx-update builds the wxwidgets port exactly as the overlay has
+# it, instead of first moving its pins to today's upstream master. Wanted
+# when the overlay is carrying a change being tested, or pinned to a commit
+# on purpose: the update below rewrites WX_REF and the two submodule pins
+# and commits the result, so an ordinary run would quietly replace what is
+# being built and push that.
+if ($disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
+    "INFO: --disable-wx-update given, leaving the wxwidgets port at its current pins."
+}
+
+if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
     # Which commit master is at, rather than what master.tar.gz happens to
     # contain.
     #
