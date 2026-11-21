@@ -405,6 +405,38 @@ function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
 # it publishes. Lists rather than a return value because vcpkg's own output is
 # this function's output: collecting a return value here would swallow the
 # whole repair build into it instead of letting it reach the run's log.
+# Every package installed for a triplet, as the spec that would put it back:
+# curl becomes curl[core,openssl]. vcpkg list gives a package a line of its own
+# and each of its features another, so a spec has to be gathered across lines
+# rather than read off one of them.
+#
+# core is always in it. These specs are used to reinstall exactly what was
+# there, and a bare name asks for the port's default features instead -- which
+# is the widening this whole pass exists to undo.
+function installed_specs([string[]]$listing, [string]$triplet) {
+    $trip_re = [regex]::escape($triplet)
+    $names   = @{}
+    $feats   = @{}
+
+    foreach ($line in $listing) {
+        if ($line -match ('^([^\s\[:]+):' + $trip_re + '\s+\d')) {
+            $names[$matches[1]] = $true
+        }
+        elseif ($line -match ('^([^\s\[:]+)\[([^\]]+)\]:' + $trip_re + '(\s|$)')) {
+            $feats[$matches[1]] = @($feats[$matches[1]]) + $matches[2]
+        }
+    }
+
+    $specs = @{}
+
+    foreach ($name in $names.keys) {
+        $set = @(@('core') + @($feats[$name] | ?{ $_ }) | sort-object -unique)
+        $specs[$name] = "$name[$($set -join ',')]"
+    }
+
+    $specs
+}
+
 function enforce_core_features([string]$triplet, [string]$host_triplet, [string[]]$wanted,
                                [System.Collections.Generic.List[string]]$unrepaired,
                                [System.Collections.Generic.List[string]]$rebuilt) {
@@ -447,7 +479,23 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
         write-warning ("${name}:${triplet} is installed as $name[$($have -join ',')]" +
                        " rather than $name[$($want -join ',')]; rebuilding it")
 
-        vcpkg_run --triplet $triplet --host-triplet $host_triplet remove $name
+        # --recurse, and put back whatever that takes with it.
+        #
+        # vcpkg will not remove a package another installed one depends on, and
+        # on every platform but Windows and macOS wxwidgets depends on curl --
+        # the one port this pass has to narrow. A bare remove exited 1 there
+        # and the repair gave up, so curl stayed as it was, went unpublished,
+        # and came back a build failure on every run after.
+        #
+        # Removing the dependents is the only way vcpkg offers to change an
+        # installed feature set, so putting them back is this pass's to do: a
+        # run that only meant to narrow curl would otherwise leave the machine
+        # with no wxwidgets at all. What went is read off the listing either
+        # side of the remove rather than out of the removal plan, so the set is
+        # whatever vcpkg actually took, however deep the closure ran.
+        $before = installed_specs $listing $triplet
+
+        vcpkg_run --triplet $triplet --host-triplet $host_triplet remove --recurse $name
 
         if ($LASTEXITCODE -ne 0) {
             write-warning "${name}:${triplet}: vcpkg remove exited $LASTEXITCODE; leaving it unpublished"
@@ -455,16 +503,44 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
             continue
         }
 
-        vcpkg_run --triplet $triplet --host-triplet $host_triplet install `
-            --no-binarycaching --allow-unsupported --recurse --keep-going $spec
+        $after   = installed_specs @(vcpkg-list) $triplet
+        $removed = @($before.keys | ?{ ($_ -ne $name) -and (-not $after.contains($_)) } | sort-object)
 
-        if ($LASTEXITCODE -ne 0) {
-            write-warning "${name}:${triplet}: vcpkg install exited $LASTEXITCODE"
-            $unrepaired.Add($name)
-            continue
+        if ($removed) {
+            "Putting back what removing ${name}:$triplet took with it: $($removed -join ', ')"
         }
 
-        $rebuilt.Add($name)
+        # The port itself at the spec that was asked for; everything else
+        # exactly as it was installed.
+        $restore = @($spec) + @($removed | %{ $before[$_] })
+
+        vcpkg_run --triplet $triplet --host-triplet $host_triplet install `
+            --no-binarycaching --allow-unsupported --recurse --keep-going @restore
+
+        $install_code  = $LASTEXITCODE
+        $final_listing = @(vcpkg-list)
+        $final         = installed_specs $final_listing $triplet
+        $restored      = @(@($name) + $removed)
+        $missing       = @($restored | ?{ -not $final.contains($_) })
+
+        if ($install_code -ne 0) {
+            write-warning "${name}:${triplet}: vcpkg install exited $install_code"
+        }
+
+        # A dependent that was taken out and did not come back is worse than
+        # the widening this was repairing, so say which, by name.
+        foreach ($pkg in $missing) {
+            write-warning "${pkg}:${triplet} did not come back from the $name repair; leaving it unpublished"
+            $unrepaired.Add($pkg)
+        }
+
+        # The dependents were rebuilt along with it, and a rebuilt package is
+        # one the server's copy is now older than.
+        foreach ($pkg in @($restored | ?{ $_ -notin $missing })) { $rebuilt.Add($pkg) }
+
+        # Repairing one port moves what is installed, and the next spec's
+        # check reads this same listing.
+        $listing = $final_listing
     }
 }
 

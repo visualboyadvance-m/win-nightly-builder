@@ -2008,22 +2008,37 @@ describe 'enforce_core_features' {
         $ast   = [System.Management.Automation.Language.Parser]::ParseFile(
                      $daily, [ref]$null, [ref]$null)
 
-        $fn = $ast.FindAll({
-                  param($n)
-                  $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-                  $n.Name -eq 'enforce_core_features'
-              }, $true)[0]
+        # enforce_core_features calls installed_specs, so both come over.
+        foreach ($name in 'installed_specs', 'enforce_core_features') {
+            $fn = $ast.FindAll({
+                      param($n)
+                      $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                      $n.Name -eq $name
+                  }.GetNewClosure(), $true)[0]
 
-        $fn | should -not -benullorempty
+            $fn | should -not -benullorempty
 
-        . ([scriptblock]::Create($fn.Extent.Text))
+            . ([scriptblock]::Create($fn.Extent.Text))
+        }
 
         function get_dep_ports([string]$t) {
             @('zlib', 'curl[core,openssl]', 'openssl', 'expat',
               'sdl3[vulkan,libusb]', 'wxwidgets[core]')
         }
         function get_host_dep_ports([string]$t) { @('glslang[tools]') }
-        function vcpkg-list                     { $script:listing }
+        # The repair reads the tree three times -- before the remove, after it
+        # to see what went, and after the install to see what came back -- so
+        # the stub answers in that order. A test that gives one listing is
+        # describing a tree nothing moved in and gets it every time.
+        function vcpkg-list {
+            $script:list_call++
+
+            switch ($script:list_call) {
+                1       { $script:listing }
+                2       { $script:listing_after }
+                default { $script:listing_final }
+            }
+        }
         function vcpkg_run {
             $script:calls += ,@($args)
             $global:LASTEXITCODE = $script:rc
@@ -2039,10 +2054,13 @@ describe 'enforce_core_features' {
         }
 
         function enforce([string[]]$listing, [string[]]$wanted = @('curl','openssl','expat'),
-                         [int]$rc = 0) {
-            $script:listing  = $listing
-            $script:calls    = @()
-            $script:rc       = $rc
+                         [int]$rc = 0, [string[]]$after, [string[]]$final) {
+            $script:listing       = $listing
+            $script:listing_after = $(if ($PSBoundParameters.ContainsKey('after')) { $after } else { $listing })
+            $script:listing_final = $(if ($PSBoundParameters.ContainsKey('final')) { $final } else { $script:listing_after })
+            $script:list_call     = 0
+            $script:calls         = @()
+            $script:rc            = $rc
             $script:bad      = [System.Collections.Generic.List[string]]::new()
             $script:repaired = [System.Collections.Generic.List[string]]::new()
 
@@ -2053,6 +2071,21 @@ describe 'enforce_core_features' {
         # The remove and install, as "<verb>:<last argument>".
         function commands {
             @($script:calls | %{ ($_ | ?{ $_ -in 'remove','install' }) + ':' + $_[-1] })
+        }
+
+        # curl with a dependent that has a feature of its own. wxwidgets
+        # depends on curl everywhere but Windows and macOS, which is what makes
+        # a bare remove exit 1 there.
+        function listing_with_dependent([string[]]$features, [string]$triplet = 'x86-mingw-static') {
+            @("curl:${triplet}   8.23.0   A library for transferring data with URLs") +
+            @($features | %{ "curl[$_]:${triplet}   a feature" }) +
+            @("wxwidgets:${triplet}   3.3.5   a GUI toolkit") +
+            @("wxwidgets[sound]:${triplet}   a feature")
+        }
+
+        # Every port spec the install was given, in the order it got them.
+        function install_specs {
+            @($script:calls | ?{ $_ -contains 'install' } | %{ @($_ | ?{ $_ -match '\[' }) })
         }
     }
 
@@ -2119,13 +2152,60 @@ describe 'enforce_core_features' {
     }
 
     it 'does not install over a remove that failed' {
-        # --recurse would take the dependent that blocked the remove with it.
         # Publishing nothing beats publishing the wrong thing, so the port is
         # named for the caller to drop instead.
         enforce (listing @('openssl','ssl','sspi')) @('curl','openssl','expat') 1
 
         commands | should -be @('remove:curl')
         @($script:bad) | should -be @('curl')
+    }
+
+    it 'takes the dependents out with it and puts them back as they were' {
+        # wxwidgets depends on curl off Windows and macOS, so the remove has to
+        # be --recurse -- and then nothing but this pass is going to reinstall
+        # the wxwidgets it just deleted. Its own features come back with it:
+        # a bare name would ask for the port's defaults, which is the widening
+        # the pass exists to undo.
+        enforce (listing_with_dependent @('openssl','ssl','sspi')) `
+            -after @() -final (listing_with_dependent @('openssl'))
+
+        commands      | should -be @('remove:curl', 'install:wxwidgets[core,sound]')
+        install_specs | should -be @('curl[core,openssl]', 'wxwidgets[core,sound]')
+    }
+
+    it 'names the dependents it rebuilt along with the port' {
+        # They were rebuilt, so the server's copies of them are out of date
+        # too, and the caller re-reads the install stamps on the strength of
+        # this list.
+        enforce (listing_with_dependent @('openssl','ssl','sspi')) `
+            -after @() -final (listing_with_dependent @('openssl'))
+
+        @($script:repaired) | should -be @('curl', 'wxwidgets')
+        $script:bad         | should -benullorempty
+    }
+
+    it 'reports a dependent that did not come back' {
+        # Worse than the widening it was repairing: the package is simply gone.
+        # Say which one rather than leaving the run to publish around it.
+        enforce (listing_with_dependent @('openssl','ssl','sspi')) `
+            -after @() `
+            -final @('curl:x86-mingw-static   8.23.0   a library',
+                     'curl[openssl]:x86-mingw-static   a feature')
+
+        @($script:bad)      | should -be @('wxwidgets')
+        @($script:repaired) | should -be @('curl')
+    }
+
+    it 'asks for nothing but the port when the remove took nothing with it' {
+        # Windows and macOS, where nothing installed depends on curl.
+        enforce @('curl:x86-mingw-static   8.23.0   a library',
+                  'curl[openssl]:x86-mingw-static   a feature',
+                  'curl[ssl]:x86-mingw-static   a feature') `
+            -after @() `
+            -final @('curl:x86-mingw-static   8.23.0   a library',
+                     'curl[openssl]:x86-mingw-static   a feature')
+
+        install_specs | should -be @('curl[core,openssl]')
     }
 
     it "lets vcpkg's own output through to the run's log" {
