@@ -782,11 +782,29 @@ foreach ($triplet in $build_triplets) {
             archive_build_logs $failed "$triplet" $tk
         }
 
+        # Everything installed for the pair, not only the ports this run was
+        # told to build.
+        #
+        # vcpkg upgrade rebuilds the port it is given together with every
+        # installed package that depends on it, so a narrowed run builds more
+        # than it names: --packages openssl moves openssl from 3.6.5 to 4.1.0
+        # and recompiles curl, libpq and wxwidgets against it. Packing
+        # $build_port_names alone published the two that were named and left
+        # the rest on the server as the copies built against 3.6.5 -- a
+        # published wxwidgets linking one OpenSSL next to a published openssl
+        # that is another, which is the pair a consumer restores and links
+        # together.
+        #
+        # Widening it costs nothing that was not already being spent. The stamp
+        # comparison further down is what decides a package is worth uploading,
+        # and it drops every one whose build has not moved since the copy on
+        # the server was put, so the packages this adds are packed only when
+        # something has actually rebuilt them. A whole run has always handed
+        # this same set over for exactly that reason.
+        #
         # A port whose build failed is not packaged from whatever copy of it
         # happens to be left in the tree, however well that copy lists.
-        add_pack_unit "$triplet" $tk @($installed_names | ?{
-            (-not $packages -or $_ -in $build_port_names) -and (-not $failed_ports.contains($_))
-        })
+        add_pack_unit "$triplet" $tk @($installed_names | ?{ -not $failed_ports.contains($_) })
 
         # For cross-compiling triplets, build the host-tool dependencies for
         # the target architecture's native host triplet (e.g. arm64-windows for
