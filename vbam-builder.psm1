@@ -112,12 +112,18 @@ elseif ($islinux) {
 # and expat parses the appcast. The emulator names both for every target, so
 # both are built and published for every triplet here.
 #
-# curl is named bare so the port's own defaults decide the TLS backend: on
-# Windows that is schannel through the ssl -> sspi feature, on everything else
-# OpenSSL. The one triplet that cannot take the default is the XP one, which
-# get_dep_ports swaps for curl[openssl] -- XP's schannel stops at TLS 1.0 and
-# SHA-1 certificates, so a curl built on it reaches nothing on today's web.
-$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads curl expat 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
+# curl asks for [core,openssl] on every triplet: one TLS backend, rather than
+# a backend added to the port's defaults. Naming a feature does not displace
+# them, and curl's default feature is ssl, which resolves to sspi -- schannel
+# -- on Windows, so curl[openssl] had compiled both backends into every
+# Windows package and left curl's own ordering to pick between them. core
+# turns the defaults off.
+#
+# OpenSSL everywhere also settles the XP triplet, the one that cannot take
+# schannel at all: XP's stops at TLS 1.0 and SHA-1 certificates, so a curl
+# built on it reaches nothing on today's web. OpenSSL brings its own TLS and
+# its own trust store.
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'curl[core,openssl]' expat 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
 
 # Ports the XP target never gets, whatever the rest of the host list holds.
 #
@@ -1301,9 +1307,8 @@ function get-triplets {
 }
 
 # The port list a triplet wants: Android takes the cross list, everything else
-# the host's own, and the XP target the host's own without libusb or Qt and
-# with an OpenSSL curl in place of the schannel one. Callers pass the triplet
-# object or its name.
+# the host's own, and the XP target the host's own without libusb or Qt.
+# Callers pass the triplet object or its name.
 #
 # libusb arrives as SDL3's libusb feature and nothing else asks for it. It
 # imports CancelIoEx and the condition variable API statically, all four of
@@ -1321,8 +1326,7 @@ function get_dep_ports([string]$triplet = '') {
     if ($triplet -match '-android$') { return $ANDROID_DEP_PORTS }
 
     if ($triplet -match '^x86-mingw') {
-	$ports = $DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]' `
-	                    -replace '^curl$', 'curl[openssl]'
+	$ports = $DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]'
 
 	# Matched on the port name alone: the list holds names, and an entry here
 	# may carry a feature set -- qtbase does -- which would never equal one.
