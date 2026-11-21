@@ -1169,9 +1169,13 @@ function setup_build_env([string]$triplet, [string]$toolkit = '') {
     if ($toolkit) { $env:VCPKG_ROOT = $env:VCPKG_ROOT.TrimEnd('/\') + "-$toolkit" }
     rewrite_vcpkg_root $old_vcpkg_root $env:VCPKG_ROOT
 
-    if ($toolkit) {
-        $env:VCPKG_OVERLAY_TRIPLETS = $env:VCPKG_OVERLAY_PORTS + "/triplets-$toolkit"
-    }
+    # Each toolkit's directory holds a triplet that pins its toolset; the
+    # default one's holds the arm64 pair, which name the newest toolset that
+    # has an ARM64 compiler in it rather than letting vcpkg take the newest
+    # there is. Both directories override only the triplets they name and the
+    # rest come from the vcpkg tree as before.
+    $env:VCPKG_OVERLAY_TRIPLETS = $env:VCPKG_OVERLAY_PORTS +
+        $(if ($toolkit) { "/triplets-$toolkit" } else { '/triplets-default' })
 
     if ($triplet -match 'mingw') {
 	if ($arch -eq 'x86') {
