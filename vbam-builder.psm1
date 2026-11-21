@@ -107,7 +107,14 @@ elseif ($islinux) {
 #
 # qtbase is named with its features rather than bare, and $QT_FEATURES just
 # above is where they are chosen and why.
-$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
+#
+# curl is the online updater's transport, and it is named bare here so the
+# port's own defaults decide the TLS backend: on Windows that is schannel
+# through the ssl -> sspi feature, on everything else OpenSSL. The one triplet
+# that cannot take the default is the XP one, which get_dep_ports swaps for
+# curl[openssl] -- XP's schannel stops at TLS 1.0 and SHA-1 certificates, so a
+# curl built on it reaches nothing on today's web.
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads curl 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
 
 # Ports the XP target never gets, whatever the rest of the host list holds.
 #
@@ -1291,8 +1298,9 @@ function get-triplets {
 }
 
 # The port list a triplet wants: Android takes the cross list, everything else
-# the host's own, and the XP target the host's own without libusb or Qt.
-# Callers pass the triplet object or its name.
+# the host's own, and the XP target the host's own without libusb or Qt and
+# with an OpenSSL curl in place of the schannel one. Callers pass the triplet
+# object or its name.
 #
 # libusb arrives as SDL3's libusb feature and nothing else asks for it. It
 # imports CancelIoEx and the condition variable API statically, all four of
@@ -1310,7 +1318,8 @@ function get_dep_ports([string]$triplet = '') {
     if ($triplet -match '-android$') { return $ANDROID_DEP_PORTS }
 
     if ($triplet -match '^x86-mingw') {
-	$ports = $DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]'
+	$ports = $DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]' `
+	                    -replace '^curl$', 'curl[openssl]'
 
 	# Matched on the port name alone: the list holds names, and an entry here
 	# may carry a feature set -- qtbase does -- which would never equal one.

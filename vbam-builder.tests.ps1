@@ -1130,17 +1130,41 @@ describe 'get_dep_ports' {
         }
     }
 
+    it 'gives an ordinary triplet a bare curl' {
+        # Bare, so the port's default ssl feature picks the backend: schannel
+        # through sspi on Windows, OpenSSL everywhere else.
+        @(get_dep_ports 'x64-windows-static' | ?{ $_ -like 'curl*' }) |
+            should -be @('curl')
+
+        @(get_dep_ports 'x64-mingw-static' | ?{ $_ -like 'curl*' }) |
+            should -be @('curl')
+    }
+
+    it 'gives the XP target an OpenSSL curl' {
+        # XP's schannel negotiates TLS 1.0 at best and validates SHA-1 chains,
+        # so a curl built against it connects to nothing. OpenSSL brings its
+        # own TLS and its own trust store and asks the system for neither.
+        @(get_dep_ports 'x86-mingw-static' | ?{ $_ -like 'curl*' }) |
+            should -be @('curl[openssl]')
+    }
+
+    it 'gives every triplet a curl' {
+        foreach ($t in @($TRIPLETS) + @($ANDROID_TRIPLETS)) {
+            port_names (get_dep_ports $t) | should -contain 'curl'
+        }
+    }
+
     it 'drops nothing else from the XP list' {
-        # The rewrite must touch the sdl3 entry and the skipped ports and no
-        # others: everything else the XP build links is what every other
-        # Windows triplet links.
+        # The rewrite must touch the sdl3 and curl entries and the skipped
+        # ports and no others: everything else the XP build links is what every
+        # other Windows triplet links.
         $xp   = @(get_dep_ports 'x86-mingw-static')
         $full = @(get_dep_ports 'x64-windows-static')
 
         $xp.Count | should -be ($full.Count - @($XP_SKIP_PORTS).Count)
 
-        @($xp | ?{ $_ -notlike 'sdl3*' }) |
-            should -be @($full | ?{ $_ -notlike 'sdl3*' -and
+        @($xp | ?{ $_ -notlike 'sdl3*' -and $_ -notlike 'curl*' }) |
+            should -be @($full | ?{ $_ -notlike 'sdl3*' -and $_ -notlike 'curl*' -and
                                     ($_ -replace '\[[^\]]+\]', '') -notin $XP_SKIP_PORTS })
     }
 
