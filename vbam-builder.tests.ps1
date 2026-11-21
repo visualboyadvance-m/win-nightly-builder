@@ -1146,11 +1146,16 @@ describe 'get_dep_ports' {
         }
     }
 
-    it 'gives every triplet a curl and an expat' {
-        # The emulator names both for every target: curl is the updater's
-        # transport and expat parses the appcast.
+    it 'gives every triplet a curl, an openssl and an expat' {
+        # The emulator names curl and expat for every target: curl is the
+        # updater's transport and expat parses the appcast. openssl is named
+        # here rather than there because curl is what asks for it -- but a
+        # consumer restoring curl without an openssl beside it compiles
+        # OpenSSL from source, so it needs a package of its own on every
+        # triplet all the same.
         foreach ($t in @($TRIPLETS) + @($ANDROID_TRIPLETS)) {
             port_names (get_dep_ports $t) | should -contain 'curl'
+            port_names (get_dep_ports $t) | should -contain 'openssl'
             port_names (get_dep_ports $t) | should -contain 'expat'
         }
     }

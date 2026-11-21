@@ -123,7 +123,15 @@ elseif ($islinux) {
 # schannel at all: XP's stops at TLS 1.0 and SHA-1 certificates, so a curl
 # built on it reaches nothing on today's web. OpenSSL brings its own TLS and
 # its own trust store.
-$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'curl[core,openssl]' expat 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
+#
+# openssl is named after it for the reason tiff and vulkan-headers are: it
+# only ever arrived behind another port, so it was upgraded only when curl
+# happened to drag it along, and a run selecting ports by name -- --packages
+# curl -- built it without publishing it. Every triplet's curl links it now,
+# so a consumer restoring curl and not finding an openssl beside it compiles
+# OpenSSL from source, which is the one thing these packages exist to spare
+# it.
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads 'curl[core,openssl]' openssl expat 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
 
 # Ports the XP target never gets, whatever the rest of the host list holds.
 #
