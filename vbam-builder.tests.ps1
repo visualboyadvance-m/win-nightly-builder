@@ -1995,4 +1995,128 @@ describe 'report_free_space' {
     }
 }
 
+
+# enforce_core_features lives in vcpkg-daily.ps1 rather than the module, and
+# that script does a run's worth of work when it is dot-sourced, so the
+# function is lifted out of it by its own parser and the vcpkg commands it
+# drives are stubbed. What is being tested is the reading of a feature set and
+# the decision to rebuild, not vcpkg.
+describe 'enforce_core_features' {
+
+    beforeall {
+        $daily = join-path $PSScriptRoot 'vcpkg-daily.ps1'
+        $ast   = [System.Management.Automation.Language.Parser]::ParseFile(
+                     $daily, [ref]$null, [ref]$null)
+
+        $fn = $ast.FindAll({
+                  param($n)
+                  $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                  $n.Name -eq 'enforce_core_features'
+              }, $true)[0]
+
+        $fn | should -not -benullorempty
+
+        . ([scriptblock]::Create($fn.Extent.Text))
+
+        function get_dep_ports([string]$t) {
+            @('zlib', 'curl[core,openssl]', 'openssl', 'expat',
+              'sdl3[vulkan,libusb]', 'wxwidgets[core]')
+        }
+        function get_host_dep_ports([string]$t) { @('glslang[tools]') }
+        function vcpkg-list                     { $script:listing }
+        function vcpkg_run {
+            $script:calls += ,@($args)
+            $global:LASTEXITCODE = $script:rc
+            "vcpkg said something about $($args[-1])"
+        }
+
+        # vcpkg list prints the core line with a version and each installed
+        # feature on a line of its own without one.
+        function listing([string[]]$features, [string]$triplet = 'x86-mingw-static') {
+            @("curl:${triplet}   8.23.0   A library for transferring data with URLs") +
+            @($features | %{ "curl[$_]:${triplet}   a feature" }) +
+            @("wxwidgets:${triplet}   3.3.1   a GUI toolkit")
+        }
+
+        function enforce([string[]]$listing, [string[]]$wanted = @('curl','openssl','expat'),
+                         [int]$rc = 0) {
+            $script:listing = $listing
+            $script:calls   = @()
+            $script:rc      = $rc
+            $script:bad     = [System.Collections.Generic.List[string]]::new()
+
+            $script:emitted = @(enforce_core_features 'x86-mingw-static' 'x64-windows' `
+                                    $wanted $script:bad 3>$null)
+        }
+
+        # The remove and install, as "<verb>:<last argument>".
+        function commands {
+            @($script:calls | %{ ($_ | ?{ $_ -in 'remove','install' }) + ':' + $_[-1] })
+        }
+    }
+
+    it 'rebuilds a port vcpkg upgrade widened' {
+        # vcpkg upgrade asks for a dependent's default features on top of the
+        # ones installed, so an openssl upgrade turned curl[core,openssl] into
+        # curl[core,openssl,ssl,sspi] -- ssl resolving to sspi, schannel, the
+        # backend [core,openssl] exists to keep out.
+        enforce (listing @('openssl','ssl','sspi'))
+
+        commands | should -be @('remove:curl', 'install:curl[core,openssl]')
+        $script:bad | should -benullorempty
+    }
+
+    it 'leaves a port that already has the feature set asked for' {
+        enforce (listing @('openssl'))
+
+        commands | should -benullorempty
+    }
+
+    it 'leaves a port with no feature lines at all' {
+        # wxwidgets[core] is core and nothing else, which is what an installed
+        # wxwidgets with no feature lines is.
+        enforce (listing @('openssl')) @('curl','wxwidgets')
+
+        commands | should -benullorempty
+    }
+
+    it 'says nothing about a port this unit is not publishing' {
+        enforce (listing @('openssl','ssl','sspi')) @('openssl','expat')
+
+        commands | should -benullorempty
+    }
+
+    it 'reads only the triplet it was given' {
+        enforce (listing @('openssl','ssl','sspi') 'x64-windows')
+
+        commands | should -benullorempty
+    }
+
+    it 'leaves a port that is not installed to the build to report' {
+        enforce @()
+
+        commands | should -benullorempty
+        $script:bad | should -benullorempty
+    }
+
+    it 'does not install over a remove that failed' {
+        # --recurse would take the dependent that blocked the remove with it.
+        # Publishing nothing beats publishing the wrong thing, so the port is
+        # named for the caller to drop instead.
+        enforce (listing @('openssl','ssl','sspi')) @('curl','openssl','expat') 1
+
+        commands | should -be @('remove:curl')
+        @($script:bad) | should -be @('curl')
+    }
+
+    it "lets vcpkg's own output through to the run's log" {
+        # The ports it could not repair go in a list rather than coming back as
+        # a return value for this reason: collecting a return value would take
+        # the whole repair build into it, and the log would lose it.
+        enforce (listing @('openssl','ssl','sspi'))
+
+        $script:emitted.Count | should -be 2
+    }
+}
+
 # vim:set sw=4 et:

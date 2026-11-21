@@ -367,6 +367,102 @@ function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
         --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
 }
 
+# Put back the feature set a [core,...] spec asked for, wherever vcpkg has
+# widened it.
+#
+# vcpkg upgrade reinstalls a port with the features it finds installed, and for
+# one it is rebuilding as somebody else's dependent rather than one it was told
+# to upgrade, it asks for `default` on top of them: create_install_info in
+# vcpkg's dependencies.cpp adds FeatureNameDefault whenever the request type is
+# not USER_REQUESTED. So `vcpkg upgrade openssl` on a triplet whose curl links
+# OpenSSL rebuilds curl[core,openssl] as curl[core,openssl,ssl,sspi] -- curl's
+# default ssl feature resolving to sspi, schannel, which is the backend
+# [core,openssl] exists to keep out. Every command succeeded, the run said
+# nothing, and the package published for that triplet was multissl.
+#
+# Only a spec naming core is checked, and it is checked by equality: core is
+# how a port says it wants none of its defaults, so the installed set has to be
+# exactly the one asked for. A spec without it -- sdl3[vulkan,libusb] -- means
+# "the defaults and these as well", which cannot be told apart from a set vcpkg
+# has widened.
+#
+# This runs where the packages are made rather than where they are built,
+# because that is the last point at which anything can still widen one: the
+# host refresh at the top of a triplet's build and the host-dep pass at the
+# bottom both upgrade ports belonging to a triplet other than the one being
+# built, so a triplet put right during its own build can be widened again by
+# the next one's.
+#
+# vcpkg cannot narrow an installed feature set -- an install of a subset is
+# already satisfied -- so the repair is a remove and a fresh install. A remove
+# that fails because something installed depends on the port is left alone:
+# --recurse would take the dependent with it, and publishing nothing beats
+# publishing the wrong thing.
+#
+# The ports it could not put right are added to $widened, for the caller to
+# keep out of what it publishes. A list rather than a return value because
+# vcpkg's own output is this function's output: collecting a return value here
+# would swallow the whole repair build into it instead of letting it reach the
+# run's log.
+function enforce_core_features([string]$triplet, [string]$host_triplet, [string[]]$wanted,
+                               [System.Collections.Generic.List[string]]$widened) {
+    $specs = @(get_dep_ports $triplet) + @(get_host_dep_ports $triplet) | ?{ $_ -match '\[' }
+    $specs = @($specs | ?{ ($_ -split '[\[\],]') -contains 'core' })
+
+    if (-not $specs) { return }
+
+    $listing = @(vcpkg-list)
+    $trip_re = [regex]::escape($triplet)
+
+    foreach ($spec in $specs) {
+        $spec -match '^([^\[]+)\[([^\]]+)\]$' | out-null
+
+        $name = $matches[1]
+        $want = @(@($matches[2] -split ',' | %{ $_.trim() } | ?{ $_ }) | sort-object -unique)
+
+        if ($wanted -and ($name -notin $wanted)) { continue }
+
+        $name_re = [regex]::escape($name)
+        $core_re = '^' + $name_re + ':' + $trip_re + '\s+\d'
+        $feat_re = '^' + $name_re + '\[([^\]]+)\]:' + $trip_re + '(\s|$)'
+
+        $installed = $false
+        $have      = @('core')
+
+        foreach ($line in $listing) {
+            if ($line -match $core_re) { $installed = $true }
+            elseif ($line -match $feat_re) { $have += $matches[1] }
+        }
+
+        # Not installed at all is the build's business, not this one's: the
+        # diff after the port loop has already said so.
+        if (-not $installed) { continue }
+
+        $have = @($have | sort-object -unique)
+
+        if (-not (compare-object $want $have)) { continue }
+
+        write-warning ("${name}:${triplet} is installed as $name[$($have -join ',')]" +
+                       " rather than $name[$($want -join ',')]; rebuilding it")
+
+        vcpkg_run --triplet $triplet --host-triplet $host_triplet remove $name
+
+        if ($LASTEXITCODE -ne 0) {
+            write-warning "${name}:${triplet}: vcpkg remove exited $LASTEXITCODE; leaving it unpublished"
+            $widened.Add($name)
+            continue
+        }
+
+        vcpkg_run --triplet $triplet --host-triplet $host_triplet install `
+            --no-binarycaching --allow-unsupported --recurse --keep-going $spec
+
+        if ($LASTEXITCODE -ne 0) {
+            write-warning "${name}:${triplet}: vcpkg install exited $LASTEXITCODE"
+            $widened.Add($name)
+        }
+    }
+}
+
 # Build and generate binary packages
 
 ni -it dir $stage_root -ea ignore | out-null
@@ -742,6 +838,17 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
     $unit_tk      = $unit.Toolkit
 
     setup_build_env $unit_triplet $unit_tk
+
+    # Before anything is weighed for publishing: a repair changes what is
+    # installed, and the comparison below reads the install stamps.
+    $widened = [System.Collections.Generic.List[string]]::new()
+
+    enforce_core_features $unit_triplet $host_t @($unit.Packages) $widened
+
+    if ($widened.Count) {
+        $build_failures += @($widened | %{ "${_}:$unit_triplet$(if ($unit_tk) { " ($unit_tk)" })" })
+        $unit.Packages   = @($unit.Packages | ?{ $_ -notin $widened })
+    }
 
     # Only what the server does not already have.
     #
