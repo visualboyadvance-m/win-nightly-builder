@@ -20,7 +20,7 @@ if (-not (test-path variable:global:iswindows)) {
     }
 }
 
-$ROOT           = $(if ($iswindows) { if ((hostname) -eq 'win_builder') { '' } else { $env:USERPROFILE } } else { $env:HOME })
+$ROOT           = $(if ($iswindows) { if ((hostname) -match '^win[-_]?builder') { '' } else { $env:USERPROFILE } } else { $env:HOME })
 
 $REPOS_ROOT     = $ROOT + '/source/repos'
 
