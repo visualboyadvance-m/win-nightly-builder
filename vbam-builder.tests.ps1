@@ -1219,8 +1219,18 @@ describe 'Qt feature sets' {
                        'testlib', 'concurrent', 'dnslookup', 'sessionmanager',
                        'brotli', 'zstd') {
             $QT_FEATURES         | should -not -contain $f
+        }
+        foreach ($f in 'sql', 'sql-psql', 'sql-sqlite', 'icu', 'openssl',
+                       'concurrent', 'dnslookup', 'sessionmanager',
+                       'brotli', 'zstd') {
             $ANDROID_QT_FEATURES | should -not -contain $f
         }
+    }
+
+    it 'gives Android the Qt Test that wxQt links' {
+        # wxQt's build/cmake/toolkit.cmake asks find_package for Qt6 Test, and
+        # the wxwidgets port does not declare it, so it has to be named here.
+        $ANDROID_QT_FEATURES | should -contain 'testlib'
     }
 
     it 'gives Android GLES instead of the desktop extras' {
@@ -1270,11 +1280,11 @@ describe 'Qt feature sets' {
         }
     }
 
-    it 'adds nothing to Android beyond GLES' {
-        # Everything Android asks for is either the common set or the two
-        # features that make it draw through GLES.
+    it 'adds nothing to Android beyond GLES and what wxQt needs' {
+        # Everything Android asks for is either the common set, the two
+        # features that make it draw through GLES, or testlib for wxQt.
         foreach ($f in $ANDROID_QT_FEATURES) {
-            if ($f -in 'egl', 'gles2') { continue }
+            if ($f -in 'egl', 'gles2', 'testlib') { continue }
 
             $COMMON_QT_FEATURES | should -contain $f
         }

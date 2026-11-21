@@ -140,7 +140,13 @@ if ($islinux) {
 if ($iswindows) {
     $DEP_PORTS  = @('vulkan') + $DEP_PORTS
 } elseif ($islinux) {
-    $DEP_PORTS  = @('vulkan') + @('vulkan-loader[wayland,xlib,xcb]') + $DEP_PORTS
+    # vulkan-headers is named, though vulkan-loader pulls it in anyway, so that
+    # it is upgraded by name. vcpkg install treats a dependency as satisfied
+    # once any version of it is installed, so a header copy that only ever
+    # arrived transitively stayed at 1.4.357 while the overlay's loader moved
+    # to 1.4.363, whose CMake then could not find Vulkan::Headers and failed
+    # every daily, taking the vulkan stub down with it.
+    $DEP_PORTS  = @('vulkan') + @('vulkan-headers') + @('vulkan-loader[wayland,xlib,xcb]') + $DEP_PORTS
 } elseif ($ismacos) {
     $DEP_PORTS  = @('vulkan-headers') + @('moltenvk') + $DEP_PORTS
 }
@@ -173,12 +179,18 @@ $DEP_PORT_NAMES = $DEP_PORTS -replace '\[[^\]]+\]',''
 # the Android build has it: the port asks for qtbase[concurrent,thread] of
 # itself on this platform, so naming it would only repeat the port.
 #
+# testlib is here although the emulator links no QTest: wxQt does. Its CMake
+# asks find_package for Qt6 Test, which wxUIActionSimulator is built on, and
+# the wxwidgets port does not declare a qtbase dependency to say so. Trimming
+# testlib out of the Android set made wxwidgets fail on every Android triplet
+# whose Qt was rebuilt trimmed.
+#
 # Built from $COMMON_QT_FEATURES, never from $QT_FEATURES: by here the latter
 # carries whatever the running host added for its own desktop -- windeployqt
 # on Windows, the X11 and fontconfig set on Linux -- and Android wants none of
 # it. Taking the wrong one asked an Android Qt for xcb, and for egl twice.
 $ANDROID_QT_FEATURES = @($COMMON_QT_FEATURES | ?{ $_ -ne 'network' }) +
-                       @('egl', 'gles2')
+                       @('egl', 'gles2', 'testlib')
 
 $ANDROID_DEP_PORTS = @('vulkan', 'tiff') +
                      ($COMMON_DEP_PORTS `
