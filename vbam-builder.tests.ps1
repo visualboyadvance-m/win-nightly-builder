@@ -2040,13 +2040,14 @@ describe 'enforce_core_features' {
 
         function enforce([string[]]$listing, [string[]]$wanted = @('curl','openssl','expat'),
                          [int]$rc = 0) {
-            $script:listing = $listing
-            $script:calls   = @()
-            $script:rc      = $rc
-            $script:bad     = [System.Collections.Generic.List[string]]::new()
+            $script:listing  = $listing
+            $script:calls    = @()
+            $script:rc       = $rc
+            $script:bad      = [System.Collections.Generic.List[string]]::new()
+            $script:repaired = [System.Collections.Generic.List[string]]::new()
 
             $script:emitted = @(enforce_core_features 'x86-mingw-static' 'x64-windows' `
-                                    $wanted $script:bad 3>$null)
+                                    $wanted $script:bad $script:repaired 3>$null)
         }
 
         # The remove and install, as "<verb>:<last argument>".
@@ -2064,6 +2065,24 @@ describe 'enforce_core_features' {
 
         commands | should -be @('remove:curl', 'install:curl[core,openssl]')
         $script:bad | should -benullorempty
+    }
+
+    it 'names what it rebuilt, so the caller can re-read the install stamps' {
+        # $stamps is read once per toolkit and kept, so a triplet earlier in
+        # the same one has usually read it before this rebuild -- with the time
+        # of the build the rebuild replaced, which is older than the copy on
+        # the server. The repaired package then looks unchanged and is never
+        # published, which is what left a multissl curl up for
+        # x86-mingw-static.
+        enforce (listing @('openssl','ssl','sspi'))
+
+        @($script:repaired) | should -be @('curl')
+    }
+
+    it 'does not name a rebuild that failed' {
+        enforce (listing @('openssl','ssl','sspi')) @('curl','openssl','expat') 1
+
+        $script:repaired | should -benullorempty
     }
 
     it 'leaves a port that already has the feature set asked for' {

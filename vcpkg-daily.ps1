@@ -399,13 +399,15 @@ function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
 # --recurse would take the dependent with it, and publishing nothing beats
 # publishing the wrong thing.
 #
-# The ports it could not put right are added to $widened, for the caller to
-# keep out of what it publishes. A list rather than a return value because
-# vcpkg's own output is this function's output: collecting a return value here
-# would swallow the whole repair build into it instead of letting it reach the
-# run's log.
+# The ports it rebuilt are added to $rebuilt and the ones it could not put
+# right to $unrepaired: the first so the caller can re-read what it knows about
+# when each package was installed, the second so it can keep those out of what
+# it publishes. Lists rather than a return value because vcpkg's own output is
+# this function's output: collecting a return value here would swallow the
+# whole repair build into it instead of letting it reach the run's log.
 function enforce_core_features([string]$triplet, [string]$host_triplet, [string[]]$wanted,
-                               [System.Collections.Generic.List[string]]$widened) {
+                               [System.Collections.Generic.List[string]]$unrepaired,
+                               [System.Collections.Generic.List[string]]$rebuilt) {
     $specs = @(get_dep_ports $triplet) + @(get_host_dep_ports $triplet) | ?{ $_ -match '\[' }
     $specs = @($specs | ?{ ($_ -split '[\[\],]') -contains 'core' })
 
@@ -449,7 +451,7 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
 
         if ($LASTEXITCODE -ne 0) {
             write-warning "${name}:${triplet}: vcpkg remove exited $LASTEXITCODE; leaving it unpublished"
-            $widened.Add($name)
+            $unrepaired.Add($name)
             continue
         }
 
@@ -458,8 +460,11 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
 
         if ($LASTEXITCODE -ne 0) {
             write-warning "${name}:${triplet}: vcpkg install exited $LASTEXITCODE"
-            $widened.Add($name)
+            $unrepaired.Add($name)
+            continue
         }
+
+        $rebuilt.Add($name)
     }
 }
 
@@ -841,14 +846,24 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
 
     # Before anything is weighed for publishing: a repair changes what is
     # installed, and the comparison below reads the install stamps.
-    $widened = [System.Collections.Generic.List[string]]::new()
+    $unrepaired = [System.Collections.Generic.List[string]]::new()
+    $rebuilt    = [System.Collections.Generic.List[string]]::new()
 
-    enforce_core_features $unit_triplet $host_t @($unit.Packages) $widened
+    enforce_core_features $unit_triplet $host_t @($unit.Packages) $unrepaired $rebuilt
 
-    if ($widened.Count) {
-        $build_failures += @($widened | %{ "${_}:$unit_triplet$(if ($unit_tk) { " ($unit_tk)" })" })
-        $unit.Packages   = @($unit.Packages | ?{ $_ -notin $widened })
+    if ($unrepaired.Count) {
+        $build_failures += @($unrepaired | %{ "${_}:$unit_triplet$(if ($unit_tk) { " ($unit_tk)" })" })
+        $unit.Packages   = @($unit.Packages | ?{ $_ -notin $unrepaired })
     }
+
+    # $stamps is read once for a toolkit and kept, so a triplet earlier in the
+    # same one has usually read it already -- before this repair reinstalled
+    # the port, and therefore with the time of the build the repair replaced.
+    # That is older than the copy on the server, so the repaired package looks
+    # unchanged and is not published: x86-mingw-static's curl was put right
+    # locally and left multissl on the server, the run reporting it as
+    # "already published and unchanged".
+    if ($rebuilt.Count) { $stamps.Remove("$unit_tk") }
 
     # Only what the server does not already have.
     #
