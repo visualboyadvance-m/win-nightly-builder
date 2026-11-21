@@ -108,13 +108,16 @@ elseif ($islinux) {
 # qtbase is named with its features rather than bare, and $QT_FEATURES just
 # above is where they are chosen and why.
 #
-# curl is the online updater's transport, and it is named bare here so the
-# port's own defaults decide the TLS backend: on Windows that is schannel
-# through the ssl -> sspi feature, on everything else OpenSSL. The one triplet
-# that cannot take the default is the XP one, which get_dep_ports swaps for
-# curl[openssl] -- XP's schannel stops at TLS 1.0 and SHA-1 certificates, so a
-# curl built on it reaches nothing on today's web.
-$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads curl 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
+# curl and expat are the online updater's two libraries: curl is its transport
+# and expat parses the appcast. The emulator names both for every target, so
+# both are built and published for every triplet here.
+#
+# curl is named bare so the port's own defaults decide the TLS backend: on
+# Windows that is schannel through the ssl -> sspi feature, on everything else
+# OpenSSL. The one triplet that cannot take the default is the XP one, which
+# get_dep_ports swaps for curl[openssl] -- XP's schannel stops at TLS 1.0 and
+# SHA-1 certificates, so a curl built on it reaches nothing on today's web.
+$DEP_PORTS      = echo zlib bzip2 'liblzma[tools]' lua pthreads curl expat 'sdl3[vulkan,libusb]' faudio gettext-libintl "qtbase[$($QT_FEATURES -join ',')]" qttools nanosvg 'wxwidgets[core]' openal-soft x264 x265 'ffmpeg[x264,x265]'
 
 # Ports the XP target never gets, whatever the rest of the host list holds.
 #

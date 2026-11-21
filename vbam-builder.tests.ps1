@@ -1148,9 +1148,12 @@ describe 'get_dep_ports' {
             should -be @('curl[openssl]')
     }
 
-    it 'gives every triplet a curl' {
+    it 'gives every triplet a curl and an expat' {
+        # The emulator names both for every target: curl is the updater's
+        # transport and expat parses the appcast.
         foreach ($t in @($TRIPLETS) + @($ANDROID_TRIPLETS)) {
             port_names (get_dep_ports $t) | should -contain 'curl'
+            port_names (get_dep_ports $t) | should -contain 'expat'
         }
     }
 
