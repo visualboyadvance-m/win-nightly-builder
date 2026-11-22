@@ -729,6 +729,38 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
         }
     }
 
+    # ── Variables vcvarsall passes through unchanged ────────────────
+    describe 'Caller variables' {
+
+        it 'does not record a variable vcvarsall did not change' {
+            $env:VCPKG_OVERLAY_TRIPLETS = 'C:\overlay\triplets-default'
+            invoke_vsenv -arch x64
+
+            (get_vsenv_state).vars.containskey('VCPKG_OVERLAY_TRIPLETS') | should -befalse
+        }
+
+        it 'keeps a variable set between two loads' {
+            # What setup_build_env does: point the overlay triplets at the
+            # toolkit's directory, then load that toolkit's environment.
+            $env:VCPKG_OVERLAY_TRIPLETS = 'C:\overlay\triplets-default'
+            invoke_vsenv -arch x64
+
+            $env:VCPKG_OVERLAY_TRIPLETS = 'C:\overlay\triplets-v143'
+            invoke_vsenv -arch x64 -toolkit v143
+
+            $env:VCPKG_OVERLAY_TRIPLETS | should -be 'C:\overlay\triplets-v143'
+        }
+
+        it 'still restores a variable vcvarsall changed' {
+            $env:VSINSTALLDIR = 'C:\before\'
+            invoke_vsenv -arch x64
+            $env:VSINSTALLDIR | should -not -be 'C:\before\'
+
+            vsenv -unload
+            $env:VSINSTALLDIR | should -be 'C:\before\'
+        }
+    }
+
     # ── VCPKG_ROOT exclusion from state.vars ────────────────────────
     describe 'VCPKG_ROOT state management' {
 

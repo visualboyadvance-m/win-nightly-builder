@@ -675,7 +675,19 @@ if ($iswindows) {
                 elseif ($name -ine 'VCPKG_ROOT') {
                     # VCPKG_ROOT is managed separately via $saved_vcpkg_root; excluding it
                     # here prevents the unload phase from clobbering it between vsenv calls.
-                    $state.vars[$name] = (get-item -literalpath "env:$name" -ea ignore).value
+                    $current = (get-item -literalpath "env:$name" -ea ignore).value
+
+                    # `set` lists the whole environment, not just what vcvarsall
+                    # changed, and what it merely passed through is the caller's,
+                    # not something to put back on the next call. Recording those
+                    # too made every variable the caller sets before calling this
+                    # one revert to its value of the previous call: setup_build_env
+                    # points VCPKG_OVERLAY_TRIPLETS at triplets-v143 and then calls
+                    # this, which put back the triplets-default of the pass before,
+                    # so every v143 package was built with the newest toolset.
+                    if ($current -ceq $value) { return }
+
+                    $state.vars[$name] = $current
                     set-item -literalpath "env:$name" $value
                 }
             }
