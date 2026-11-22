@@ -394,44 +394,54 @@ function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
 # the next one's.
 #
 # vcpkg cannot narrow an installed feature set -- an install of a subset is
-# already satisfied -- so the repair is a remove and a fresh install. A remove
-# that fails because something installed depends on the port is left alone:
-# --recurse would take the dependent with it, and publishing nothing beats
-# publishing the wrong thing.
+# already satisfied -- so the repair is a remove and a fresh install. The
+# remove is --recurse, and putting back whatever that takes with it, in
+# whichever triplet it lands, is this function's to do.
 #
-# The ports it rebuilt are added to $rebuilt and the ones it could not put
-# right to $unrepaired: the first so the caller can re-read what it knows about
-# when each package was installed, the second so it can keep those out of what
-# it publishes. Lists rather than a return value because vcpkg's own output is
-# this function's output: collecting a return value here would swallow the
-# whole repair build into it instead of letting it reach the run's log.
-# Every package installed for a triplet, as the spec that would put it back:
-# curl becomes curl[core,openssl]. vcpkg list gives a package a line of its own
-# and each of its features another, so a spec has to be gathered across lines
-# rather than read off one of them.
+# The packages it rebuilt are added to $rebuilt and the ones it could not put
+# right to $unrepaired, both as "<port>:<triplet>": the first so the caller can
+# re-read what it knows about when each package was installed, the second so it
+# can keep those out of what it publishes. Qualified because neither set is
+# confined to the triplet being repaired. Lists rather than a return value
+# because vcpkg's own output is this function's output: collecting a return
+# value here would swallow the whole repair build into it instead of letting it
+# reach the run's log.
+# Every package installed, for every triplet, as the spec that would put it
+# back, keyed "<port>:<triplet>": curl becomes curl[core,openssl]. vcpkg list
+# gives a package a line of its own and each of its features another, so a spec
+# has to be gathered across lines rather than read off one of them.
+#
+# Every triplet rather than the one being repaired, because a removal is not
+# confined to one. qtbase on a host triplet is a host dependency of every cross
+# target's qtbase, so removing it takes the targets' copies with it: read per
+# triplet, those casualties are invisible, and the restore leaves them out.
+# That is how macmini-intel lost qtbase:arm64-osx to an x64-osx repair, and
+# posixsh lost qtbase:x86-android -- and with it wxwidgets:x86-android, which
+# needs Qt to configure at all.
 #
 # core is always in it. These specs are used to reinstall exactly what was
 # there, and a bare name asks for the port's default features instead -- which
 # is the widening this whole pass exists to undo.
-function installed_specs([string[]]$listing, [string]$triplet) {
-    $trip_re = [regex]::escape($triplet)
-    $names   = @{}
-    $feats   = @{}
+function installed_specs([string[]]$listing) {
+    $names = @{}
+    $feats = @{}
 
     foreach ($line in $listing) {
-        if ($line -match ('^([^\s\[:]+):' + $trip_re + '\s+\d')) {
-            $names[$matches[1]] = $true
+        if ($line -match '^([^\s\[:]+):(\S+)\s+\d') {
+            $names["$($matches[1]):$($matches[2])"] = $true
         }
-        elseif ($line -match ('^([^\s\[:]+)\[([^\]]+)\]:' + $trip_re + '(\s|$)')) {
-            $feats[$matches[1]] = @($feats[$matches[1]]) + $matches[2]
+        elseif ($line -match '^([^\s\[:]+)\[([^\]]+)\]:(\S+)(\s|$)') {
+            $key         = "$($matches[1]):$($matches[3])"
+            $feats[$key] = @($feats[$key]) + $matches[2]
         }
     }
 
     $specs = @{}
 
-    foreach ($name in $names.keys) {
-        $set = @(@('core') + @($feats[$name] | ?{ $_ }) | sort-object -unique)
-        $specs[$name] = "$name[$($set -join ',')]"
+    foreach ($key in $names.keys) {
+        $name        = ($key -split ':')[0]
+        $set         = @(@('core') + @($feats[$key] | ?{ $_ }) | sort-object -unique)
+        $specs[$key] = "$name[$($set -join ',')]"
     }
 
     $specs
@@ -479,7 +489,8 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
         write-warning ("${name}:${triplet} is installed as $name[$($have -join ',')]" +
                        " rather than $name[$($want -join ',')]; rebuilding it")
 
-        # --recurse, and put back whatever that takes with it.
+        # --recurse, and put back whatever that takes with it, in whatever
+        # triplet it lands in.
         #
         # vcpkg will not remove a package another installed one depends on, and
         # on every platform but Windows and macOS wxwidgets depends on curl --
@@ -492,45 +503,65 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
         # run that only meant to narrow curl would otherwise leave the machine
         # with no wxwidgets at all. What went is read off the listing either
         # side of the remove rather than out of the removal plan, so the set is
-        # whatever vcpkg actually took, however deep the closure ran.
-        $before = installed_specs $listing $triplet
+        # whatever vcpkg actually took, however deep the closure ran and
+        # whichever triplets it ran through.
+        $qualified = "${name}:$triplet"
+        $before    = installed_specs $listing
 
         vcpkg_run --triplet $triplet --host-triplet $host_triplet remove --recurse $name
 
         if ($LASTEXITCODE -ne 0) {
-            write-warning "${name}:${triplet}: vcpkg remove exited $LASTEXITCODE; leaving it unpublished"
-            $unrepaired.Add($name)
+            write-warning "${qualified}: vcpkg remove exited $LASTEXITCODE; leaving it unpublished"
+            $unrepaired.Add($qualified)
             continue
         }
 
-        $after   = installed_specs @(vcpkg-list) $triplet
-        $removed = @($before.keys | ?{ ($_ -ne $name) -and (-not $after.contains($_)) } | sort-object)
+        $after   = installed_specs @(vcpkg-list)
+        $removed = @($before.keys | ?{ ($_ -ne $qualified) -and (-not $after.contains($_)) } | sort-object)
 
         if ($removed) {
-            "Putting back what removing ${name}:$triplet took with it: $($removed -join ', ')"
+            "Putting back what removing $qualified took with it: $($removed -join ', ')"
         }
 
         # The port itself at the spec that was asked for; everything else
-        # exactly as it was installed.
-        $restore = @($spec) + @($removed | %{ $before[$_] })
+        # exactly as it was installed. One install per triplet, because a spec
+        # carries no triplet of its own and --triplet takes one.
+        #
+        # The host triplet goes first where the removal reached it, for the
+        # reason get-triplets orders a run that way: a cross target installed
+        # first pulls its host dependency in on its own, and vcpkg gives a host
+        # dependency the port's default features -- the widening this pass
+        # exists to undo, reintroduced by the repair for it.
+        $restore = @{ "$triplet" = @($spec) }
 
-        vcpkg_run --triplet $triplet --host-triplet $host_triplet install `
-            --no-binarycaching --allow-unsupported --recurse --keep-going @restore
-
-        $install_code  = $LASTEXITCODE
-        $final_listing = @(vcpkg-list)
-        $final         = installed_specs $final_listing $triplet
-        $restored      = @(@($name) + $removed)
-        $missing       = @($restored | ?{ -not $final.contains($_) })
-
-        if ($install_code -ne 0) {
-            write-warning "${name}:${triplet}: vcpkg install exited $install_code"
+        foreach ($key in $removed) {
+            $t           = ($key -split ':')[1]
+            $restore[$t] = @($restore[$t]) + $before[$key]
         }
 
+        $order = @(@($host_triplet, $triplet) + @($restore.keys | sort-object)) |
+                     ?{ $restore.contains("$_") } | select-object -unique
+
+        foreach ($t in $order) {
+            $t_specs = @($restore[$t])
+
+            vcpkg_run --triplet $t --host-triplet $host_triplet install `
+                --no-binarycaching --allow-unsupported --recurse --keep-going @t_specs
+
+            if ($LASTEXITCODE -ne 0) {
+                write-warning "${qualified}: vcpkg install for $t exited $LASTEXITCODE"
+            }
+        }
+
+        $final_listing = @(vcpkg-list)
+        $final         = installed_specs $final_listing
+        $restored      = @(@($qualified) + $removed)
+        $missing       = @($restored | ?{ -not $final.contains($_) })
+
         # A dependent that was taken out and did not come back is worse than
-        # the widening this was repairing, so say which, by name.
+        # the widening this was repairing, so say which, by name and triplet.
         foreach ($pkg in $missing) {
-            write-warning "${pkg}:${triplet} did not come back from the $name repair; leaving it unpublished"
+            write-warning "$pkg did not come back from the $qualified repair; leaving it unpublished"
             $unrepaired.Add($pkg)
         }
 
@@ -919,6 +950,41 @@ foreach ($triplet in $build_triplets) {
     }
 }
 
+# Every repair first, and only then the packing.
+#
+# These two were one loop, each unit repaired and then immediately packed. A
+# repair does not stay inside its own unit, though: removing a widened port
+# takes packages out of other triplets with it, and a unit already packed is
+# past the point where anything it rebuilds can still be published. x64-osx's
+# qtbase repair rebuilt arm64-osx's, which had been packed half an hour
+# earlier, and the run finished leaving the server a qtbase older than the
+# openssl beside it.
+#
+# Repairing the lot first costs an extra pass over the units and means every
+# pack set below is weighed against a tree nothing is going to move again.
+$unrepaired = [System.Collections.Generic.List[string]]::new()
+$rebuilt    = [System.Collections.Generic.List[string]]::new()
+
+foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
+    setup_build_env $unit.Triplet $unit.Toolkit
+
+    $before_count = $unrepaired.Count
+
+    enforce_core_features $unit.Triplet $host_t @($unit.Packages) $unrepaired $rebuilt
+
+    # Reported against the unit that was being repaired, since that is the
+    # toolkit the failure happened under; the entries themselves stay bare
+    # "<port>:<triplet>" for the pack sets below to match on.
+    $build_failures += @($unrepaired | select-object -skip $before_count |
+                             %{ "$_$(if ($unit.Toolkit) { " ($($unit.Toolkit))" })" })
+}
+
+# Named here rather than left to the pack sets to imply, because a repair
+# reaches triplets nobody asked it to and this is the only place that says so.
+if ($rebuilt.Count) {
+    "Repaired and rebuilt: $(@($rebuilt | sort-object -unique) -join ', ')"
+}
+
 # One packing pass, now that every build is done.
 #
 # It used to run inside each triplet's own iteration, which packed a host
@@ -938,26 +1004,14 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
 
     setup_build_env $unit_triplet $unit_tk
 
-    # Before anything is weighed for publishing: a repair changes what is
-    # installed, and the comparison below reads the install stamps.
-    $unrepaired = [System.Collections.Generic.List[string]]::new()
-    $rebuilt    = [System.Collections.Generic.List[string]]::new()
+    # What the repair pass could not put right, for this triplet, by bare name:
+    # a package missing from the tree is one there is nothing to pack.
+    $unit_unrepaired = @($unrepaired | ?{ $_ -match ":$([regex]::escape($unit_triplet))$" } |
+                             %{ ($_ -split ':')[0] })
 
-    enforce_core_features $unit_triplet $host_t @($unit.Packages) $unrepaired $rebuilt
-
-    if ($unrepaired.Count) {
-        $build_failures += @($unrepaired | %{ "${_}:$unit_triplet$(if ($unit_tk) { " ($unit_tk)" })" })
-        $unit.Packages   = @($unit.Packages | ?{ $_ -notin $unrepaired })
+    if ($unit_unrepaired) {
+        $unit.Packages = @($unit.Packages | ?{ $_ -notin $unit_unrepaired })
     }
-
-    # $stamps is read once for a toolkit and kept, so a triplet earlier in the
-    # same one has usually read it already -- before this repair reinstalled
-    # the port, and therefore with the time of the build the repair replaced.
-    # That is older than the copy on the server, so the repaired package looks
-    # unchanged and is not published: x86-mingw-static's curl was put right
-    # locally and left multissl on the server, the run reporting it as
-    # "already published and unchanged".
-    if ($rebuilt.Count) { $stamps.Remove("$unit_tk") }
 
     # Only what the server does not already have.
     #
@@ -992,6 +1046,13 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
     $unit | add-member -notepropertyname Remote -notepropertyvalue $remote -force
 
     if (-not $force_build) {
+        # Read once per toolkit and kept. It used to need discarding whenever a
+        # repair rebuilt something, because the repairs happened in this same
+        # loop and a stamp read for an earlier triplet predated them -- which
+        # left x86-mingw-static's curl put right locally and still multissl on
+        # the server, reported as "already published and unchanged". Every
+        # repair is through before this loop starts now, so whatever it reads
+        # is current for the whole pass.
         if (-not $stamps.contains("$unit_tk")) { $stamps["$unit_tk"] = installed_package_stamps }
 
         $built  = $stamps["$unit_tk"]

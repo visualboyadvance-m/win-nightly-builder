@@ -2087,6 +2087,13 @@ describe 'enforce_core_features' {
         function install_specs {
             @($script:calls | ?{ $_ -contains 'install' } | %{ @($_ | ?{ $_ -match '\[' }) })
         }
+
+        # The triplet each install was told to install for, in order. A repair
+        # that crossed triplets runs one install per triplet.
+        function install_triplets {
+            @($script:calls | ?{ $_ -contains 'install' } |
+                  %{ $_[[array]::indexof([object[]]$_, '--triplet') + 1] })
+        }
     }
 
     it 'rebuilds a port vcpkg upgrade widened' {
@@ -2109,7 +2116,7 @@ describe 'enforce_core_features' {
         # x86-mingw-static.
         enforce (listing @('openssl','ssl','sspi'))
 
-        @($script:repaired) | should -be @('curl')
+        @($script:repaired) | should -be @('curl:x86-mingw-static')
     }
 
     it 'does not name a rebuild that failed' {
@@ -2157,7 +2164,7 @@ describe 'enforce_core_features' {
         enforce (listing @('openssl','ssl','sspi')) @('curl','openssl','expat') 1
 
         commands | should -be @('remove:curl')
-        @($script:bad) | should -be @('curl')
+        @($script:bad) | should -be @('curl:x86-mingw-static')
     }
 
     it 'takes the dependents out with it and puts them back as they were' {
@@ -2180,7 +2187,7 @@ describe 'enforce_core_features' {
         enforce (listing_with_dependent @('openssl','ssl','sspi')) `
             -after @() -final (listing_with_dependent @('openssl'))
 
-        @($script:repaired) | should -be @('curl', 'wxwidgets')
+        @($script:repaired) | should -be @('curl:x86-mingw-static', 'wxwidgets:x86-mingw-static')
         $script:bad         | should -benullorempty
     }
 
@@ -2192,8 +2199,37 @@ describe 'enforce_core_features' {
             -final @('curl:x86-mingw-static   8.23.0   a library',
                      'curl[openssl]:x86-mingw-static   a feature')
 
-        @($script:bad)      | should -be @('wxwidgets')
-        @($script:repaired) | should -be @('curl')
+        @($script:bad)      | should -be @('wxwidgets:x86-mingw-static')
+        @($script:repaired) | should -be @('curl:x86-mingw-static')
+    }
+
+    it 'puts back what the remove took from another triplet' {
+        # A removal is not confined to the triplet it was asked for: qtbase on
+        # a host triplet is a host dependency of every cross target's qtbase,
+        # so --recurse takes the targets' copies with it. Read per triplet
+        # those casualties are invisible and the restore leaves them out,
+        # which is how macmini-intel finished a run with no qtbase for
+        # arm64-osx at all, and posixsh with none for x86-android -- and so no
+        # wxwidgets there either, since wx needs Qt to configure.
+        #
+        # The host triplet is installed first for the reason get-triplets
+        # orders a run that way: a cross target installed first pulls its host
+        # dependency in on its own, with the port's default features.
+        enforce @('curl:x86-mingw-static   8.23.0   a library',
+                  'curl[openssl]:x86-mingw-static   a feature',
+                  'curl[ssl]:x86-mingw-static   a feature',
+                  'qtbase:x64-windows   6.11.3   Qt',
+                  'qtbase[network]:x64-windows   a feature') `
+            -after @() `
+            -final @('curl:x86-mingw-static   8.23.0   a library',
+                     'curl[openssl]:x86-mingw-static   a feature',
+                     'qtbase:x64-windows   6.11.3   Qt',
+                     'qtbase[network]:x64-windows   a feature')
+
+        install_specs       | should -be @('qtbase[core,network]', 'curl[core,openssl]')
+        install_triplets    | should -be @('x64-windows', 'x86-mingw-static')
+        @($script:repaired) | should -be @('curl:x86-mingw-static', 'qtbase:x64-windows')
+        $script:bad         | should -benullorempty
     }
 
     it 'asks for nothing but the port when the remove took nothing with it' {
