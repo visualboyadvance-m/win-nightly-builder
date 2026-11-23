@@ -1972,6 +1972,40 @@ function get-taskaction {
 	    " *>> $script:ROOT/logs/$log")
 }
 
+# What the module knows, as functions.
+#
+# These were exported variables, which is no way to hand anyone a value:
+# export-modulemember -variable writes the name into whatever scope ran the
+# import, so importing this module replaced a caller's $root with the
+# builder's and a caller's $triplets with the platform's list, case
+# insensitively and without a word said. A function cannot do that to anyone.
+#
+# Inside the module they stay variables, read as $script:NAME for the reason
+# the top of this file gives.
+#
+# get-buildhosts rather than get-hosttriplets, which would be one character
+# from get-hosttriplet while answering with a different set of triplets. The
+# port lists need no name of their own: get-depports with no triplet is the
+# list every triplet links, and get-depports with an android one is the
+# android list.
+function get-root              { $script:ROOT }
+function get-reposroot         { $script:REPOS_ROOT }
+function get-triplets          { $script:TRIPLETS }
+function get-androidtriplets   { $script:ANDROID_TRIPLETS }
+function get-buildhosts        { $script:HOST_TRIPLETS }
+function get-toolkits          { $script:TOOLKITS }
+function get-overlayports      { $script:OVERLAY_PORTS }
+function get-lowdiskgb         { $script:LOW_DISK_GB }
+function get-qtfeatures        { $script:QT_FEATURES }
+function get-commonqtfeatures  { $script:COMMON_QT_FEATURES }
+function get-androidqtfeatures { $script:ANDROID_QT_FEATURES }
+function get-xpskipports       { $script:XP_SKIP_PORTS }
+function get-portnames         { $script:DEP_PORT_NAMES }
+function get-androidportnames  { $script:ANDROID_DEP_PORT_NAMES }
+function get-allportnames      { $script:ALL_DEP_PORT_NAMES }
+function get-hosttools         { $script:HOST_DEP_PORTS }
+function get-hosttoolnames     { $script:HOST_DEP_PORT_NAMES }
+
 # Short names for a prompt, where a name is being typed rather than read. A
 # script keeps the full one: it is read far more often than it is written, and
 # an initialism is no use to someone reading it for the first time.
@@ -2006,14 +2040,26 @@ set-alias -force ig      invoke-git
 set-alias -force uco     update-checkout
 set-alias -force lkg     lock-git
 set-alias -force ulg     unlock-git
+set-alias -force gr      get-root
+set-alias -force grr     get-reposroot
+set-alias -force gt      get-triplets
+set-alias -force gat     get-androidtriplets
+set-alias -force gbh     get-buildhosts
+set-alias -force gtk     get-toolkits
+set-alias -force gqf     get-qtfeatures
 
-export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,XP_SKIP_PORTS,QT_FEATURES,COMMON_QT_FEATURES,ANDROID_QT_FEATURES,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
-		    -function enter-buildenv,exit-buildenv,resolve-triplets,get-hosttriplet,get-depports,get-hostdepports,get-hostports,get-plannedfeatures,update-hosttools, `
-		              get-packagestamps,save-buildlogs, `
+export-modulemember -function enter-buildenv,exit-buildenv,resolve-triplets,get-hosttriplet, `
+		              get-depports,get-hostdepports,get-hostports,get-plannedfeatures, `
+		              update-hosttools,get-packagestamps,save-buildlogs, `
 		              convertfrom-sftplisting,test-publishneeded,get-remotepackages, `
 		              test-wholerun,get-gitlockpath,test-gitlock,get-vcpkgtrees, `
-		              get-freespace,show-freespace, `
-		              get-taskaction,invoke-vcpkg,invoke-git, `
-		              update-checkout,lock-git,unlock-git `
+		              get-freespace,show-freespace,get-taskaction,invoke-vcpkg,invoke-git, `
+		              update-checkout,lock-git,unlock-git, `
+		              get-root,get-reposroot,get-triplets,get-androidtriplets,get-buildhosts, `
+		              get-toolkits,get-overlayports,get-lowdiskgb, `
+		              get-qtfeatures,get-commonqtfeatures,get-androidqtfeatures, `
+		              get-xpskipports,get-portnames,get-androidportnames,get-allportnames, `
+		              get-hosttools,get-hosttoolnames `
 		    -alias vcpkg,ebe,xbe,rt,ght,gdp,ghdp,ghp,gpf,uht,gpstamp,sbl,cfsl,tpn, `
-		           grp,twr,gglp,tgl,gvt,gfs,sfs,gta,iv,ig,uco,lkg,ulg
+		           grp,twr,gglp,tgl,gvt,gfs,sfs,gta,iv,ig,uco,lkg,ulg, `
+		           gr,grr,gt,gat,gbh,gtk,gqf

@@ -6,7 +6,7 @@ $taskname = 'VBAM Hourly Update Repos'
 
 $trigger = new-scheduledtasktrigger -once:$false -at 00:00 -repetitioninterval (new-timespan -hours 1)
 
-if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
+if (-not (test-path "$(get-root)/logs")) { ni -it dir "$(get-root)/logs" > $null }
 
 $action  = get-taskaction -script update-repos.ps1 -log update-repos.log
 

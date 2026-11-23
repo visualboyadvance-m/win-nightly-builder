@@ -59,11 +59,11 @@ $force_build = if ($filtered_args[0] -match '^--?f') { $true} else { $false }
 $build_triplets = resolve-triplets @filtered_args
 
 if ($packages) {
-    $unknown = $packages | ?{ $_ -notin $ALL_DEP_PORT_NAMES }
+    $unknown = $packages | ?{ $_ -notin (get-allportnames) }
     if ($unknown) { write-error "Unknown package(s): $($unknown -join ', ')" -ea stop }
 }
 if ($skip_packages) {
-    $unknown = $skip_packages | ?{ $_ -notin $ALL_DEP_PORT_NAMES }
+    $unknown = $skip_packages | ?{ $_ -notin (get-allportnames) }
     if ($unknown) { write-error "Unknown skip package(s): $($unknown -join ', ')" -ea stop }
 }
 
@@ -88,9 +88,9 @@ function get-selectedports([alias('t')][string]$triplet) {
 # fetch its Qt tools instead of compiling them. No desktop build asks for any of
 # it, which is why a default run has to name them.
 function get-androidhostports([alias('t')][string]$triplet) {
-    if ("$triplet" -notin $HOST_TRIPLETS) { return @() }
+    if ("$triplet" -notin (get-buildhosts)) { return @() }
 
-    $ports = @(get-hostports $ANDROID_TRIPLETS $triplet)
+    $ports = @(get-hostports (get-androidtriplets) $triplet)
 
     # A port the triplet's own list already names keeps that list's spec: its
     # features are the ones the emulator's CMakeLists asks for, and naming one
@@ -136,7 +136,7 @@ function get-heldbackports([alias('t')][string]$triplet, [string[]]$added) {
 
     if (@(vcpkg-list | ?{ $_ -match ':[^\s]+-android(\s|$)' })) { return $added }
 
-    @(@(get-hostports $ANDROID_TRIPLETS $triplet -Tools) -replace '\[[^\]]+\]','' | ?{ $_ -in $added })
+    @(@(get-hostports (get-androidtriplets) $triplet -Tools) -replace '\[[^\]]+\]','' | ?{ $_ -in $added })
 }
 
 $selected_port_names = @($build_triplets | %{ get-selectedports $_ }) -replace '\[[^\]]+\]','' | select-object -unique
@@ -150,7 +150,7 @@ $whole_run = test-wholerun @($build_triplets | %{ "$_" }) $packages $skip_packag
 
 
 "INFO: vcpkg packages upgrade started on $(date)."
-show-freespace $REPOS_ROOT
+show-freespace (get-reposroot)
 
 # set-content ends lines the way the platform does, so a Windows builder
 # rewriting a port file turns every line of it CRLF: the whole file reads as
@@ -234,7 +234,7 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
 
     $wx_sha = $wx_sha[0]
 
-    $overlay_dir = $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS })
+    $overlay_dir = $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { (get-overlayports) })
 
     # Held for the pull, the commit and the push together rather than through
     # update-checkout, which is one update and would let another run in
@@ -896,7 +896,7 @@ foreach ($triplet in $build_triplets) {
         # compiles the lot from source having downloaded the packages that were
         # supposed to spare it that. They have to be published under every
         # toolkit that has packages of its own to go with them.
-        $is_android = "$triplet" -in $ANDROID_TRIPLETS
+        $is_android = "$triplet" -in (get-androidtriplets)
 
         if ($is_android) {
             # Android is never a host. Nothing on the device runs moc or

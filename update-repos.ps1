@@ -20,7 +20,7 @@ $erroractionpreference = 'stop'
 # the pull happens on the next hour instead, which is what this schedule is
 # for.
 echo visualboyadvance-m vcpkg vcpkg-binpkg-prototype vcpkg-overlay win-nightly-builder windows-dev-guide | %{
-    $path = "$REPOS_ROOT/$_"
+    $path = "$(get-reposroot)/$_"
     $held = lock-git $path -timeout_seconds 0 -kind 'inuse'
 
     if (-not $held) {

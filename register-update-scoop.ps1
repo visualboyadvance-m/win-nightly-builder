@@ -7,7 +7,7 @@ $runat    = '10:00'
 
 $trigger = new-scheduledtasktrigger -at $runat -daily
 
-if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
+if (-not (test-path "$(get-root)/logs")) { ni -it dir "$(get-root)/logs" > $null }
 
 $action  = get-taskaction -script update-scoop.ps1 -log update-scoop.log
 

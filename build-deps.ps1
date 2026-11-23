@@ -5,7 +5,7 @@ $progresspreference    = 'silentlycontinue'
 
 $build_triplets = resolve-triplets @args
 
-$repo_path = join-path $REPOS_ROOT visualboyadvance-m
+$repo_path = join-path (get-reposroot) visualboyadvance-m
 
 update-checkout $repo_path -submodules `
     -origin git@github.com:visualboyadvance-m/visualboyadvance-m

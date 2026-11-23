@@ -18,7 +18,7 @@ $runat    = '23:00'
 
 $trigger = new-scheduledtasktrigger -at $runat -daily
 
-if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
+if (-not (test-path "$(get-root)/logs")) { ni -it dir "$(get-root)/logs" > $null }
 
 $action  = get-taskaction -noprofile -script build-nightly.ps1 -log build-nightly-arm64.log `
 			   -arguments '--triplets arm64-windows-static'

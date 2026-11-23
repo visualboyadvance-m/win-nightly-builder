@@ -9,7 +9,7 @@ $force_build = $args | ?{ $_ -match '^--?f' }
 
 $build_triplets = resolve-triplets @args | ?{
     ($_ -in 'x64-windows-static','x86-mingw-static','arm64-windows-static') -or
-    ($_ -in $ANDROID_TRIPLETS)
+    ($_ -in (get-androidtriplets))
 }
 
 # Which checkout a triplet builds out of. Android gets one of its own: what
@@ -20,8 +20,8 @@ $build_triplets = resolve-triplets @args | ?{
 # perpetually stale and never rebuild them. Answered per triplet rather than
 # once for the run, so a set holding both kinds gets both checkouts.
 function get-tripletrepo($triplet) {
-    join-path $REPOS_ROOT $(
-	if ($triplet -in $ANDROID_TRIPLETS) { 'visualboyadvance-m-nightly-android' }
+    join-path (get-reposroot) $(
+	if ($triplet -in (get-androidtriplets)) { 'visualboyadvance-m-nightly-android' }
 	else                                { 'visualboyadvance-m-nightly' }
     )
 }
@@ -62,7 +62,7 @@ foreach ($repo_path in @($build_triplets | %{ get-tripletrepo $_ } | select -uni
     $forced    = [bool]$force_build
 
     if (-not (test-path $repo_path)) {
-	pushd $REPOS_ROOT
+	pushd (get-reposroot)
 
 	git clone https://github.com/visualboyadvance-m/visualboyadvance-m.git $repo_name
 
@@ -198,7 +198,7 @@ $vcpkg_tree_locks = @(get-vcpkgtrees | %{
 })
 
 "INFO: Build started on $(date)."
-show-freespace $REPOS_ROOT
+show-freespace (get-reposroot)
 
 foreach ($item in $plan) {
     $triplet   = $item.triplet
@@ -219,7 +219,7 @@ foreach ($item in $plan) {
     $translations_only_str = if ($item.translations_only) `
 	{ 'TRUE' } else { 'FALSE' };
 
-    if ($triplet -in $ANDROID_TRIPLETS) {
+    if ($triplet -in (get-androidtriplets)) {
 	# The NDK toolchain file the vcpkg triplet chainloads selects the
 	# compiler, so naming one here would only fight it. ANDROID_HOME and
 	# ANDROID_NDK_HOME come from the environment; the project derives
@@ -301,9 +301,9 @@ foreach ($item in $plan) {
     # The Android builds produce visualboyadvance-m-<ARCH_NAME>.apk, the native
     # ones a zip; either way the name the build chose is the name that gets
     # published.
-    $artifacts = if     ($item.translations_only)         { 'translations.zip' }
-		 elseif ($item.triplet -in $ANDROID_TRIPLETS) { '*.apk' }
-		 else                                         { '*.zip' }
+    $artifacts = if     ($item.translations_only)             { 'translations.zip' }
+		 elseif ($item.triplet -in (get-androidtriplets)) { '*.apk' }
+		 else                                             { '*.zip' }
 
     # Resolved rather than copied blind. A build that reported success and left
     # nothing behind is the same silent hole as a configure that failed, and

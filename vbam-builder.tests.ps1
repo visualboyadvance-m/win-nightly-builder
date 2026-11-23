@@ -1039,14 +1039,16 @@ describe 'resolve-triplets' {
             @(resolve-triplets @a | %{ "$_" }) | should -be @('x64-windows-static', 'x86-windows')
         }
 
-        it 'falls back to $TRIPLETS when none are named' {
-            # $TRIPLETS is deliberately not exported, so that callers have to
-            # come through resolve-triplets; read it from the module's own scope.
+        it 'falls back to the platform list when none are named' {
+            # get-triplets is that list. The module keeps it in a variable it
+            # no longer hands out, so this is the only way to ask for it, and
+            # resolve-triplets is what a caller wanting the run's own set
+            # goes through.
             #
             # The same set, in the same order, except that the host triplet is
             # moved to the front -- see 'builds the host triplet before
             # anything else' above for why it has to be.
-            $expected = & $script:vbam { $TRIPLETS }
+            $expected = get-triplets
             $host_t   = get-hosttriplet
             $expected = @($host_t) + @($expected | ?{ $_ -ne $host_t })
 
@@ -1114,25 +1116,25 @@ describe 'resolve-triplets' {
 # The hosts an Android cross build can be hosted on, which is also what
 # get-hostports below is asked about, one at a time.
 
-describe 'HOST_TRIPLETS' {
+describe 'get-buildhosts' {
 
     it 'is the plain OS triplets of this platform' {
         # No -static and no mingw: those are targets, not machines vcpkg
         # builds host tools for.
-        $expected = & $script:vbam { $TRIPLETS } | ?{ $_ -notmatch '(-static|mingw)' }
-        $HOST_TRIPLETS | should -be @($expected)
+        $expected = (get-triplets) | ?{ $_ -notmatch '(-static|mingw)' }
+        (get-buildhosts) | should -be @($expected)
     }
 
     it 'names every Windows architecture, not just this builder' -skip:(-not $IsWindows) {
         # The point of the list: an Android build hosted on an arm64 or x86
         # Windows machine wants host Qt packages too, and neither is the
         # architecture the nightly runs on.
-        $HOST_TRIPLETS | should -be @('x64-windows', 'x86-windows', 'arm64-windows')
+        (get-buildhosts) | should -be @('x64-windows', 'x86-windows', 'arm64-windows')
     }
 
     it 'is drawn from the triplets this platform builds' {
-        $platform_triplets = & $script:vbam { $TRIPLETS }
-        $HOST_TRIPLETS | %{ $_ | should -bein $platform_triplets }
+        $platform_triplets = get-triplets
+        (get-buildhosts) | %{ $_ | should -bein $platform_triplets }
     }
 }
 
@@ -1168,11 +1170,11 @@ describe 'get-depports' {
         # triplet could not be used by anything that runs there.
         $xp = port_names (get-depports 'x86-mingw-static')
 
-        foreach ($port in $XP_SKIP_PORTS) { $xp | should -not -contain $port }
+        foreach ($port in (get-xpskipports)) { $xp | should -not -contain $port }
     }
 
     it 'keeps the Qt ports everywhere else' {
-        foreach ($port in $XP_SKIP_PORTS) {
+        foreach ($port in (get-xpskipports)) {
             port_names (get-depports 'x64-windows-static') | should -contain $port
             port_names (get-depports 'x64-mingw-static')   | should -contain $port
         }
@@ -1188,7 +1190,7 @@ describe 'get-depports' {
         # OpenSSL suits the XP triplet in particular, whose schannel stops at
         # TLS 1.0 and SHA-1 chains: OpenSSL brings its own TLS and its own
         # trust store and asks the system for neither.
-        foreach ($t in @($TRIPLETS) + @($ANDROID_TRIPLETS)) {
+        foreach ($t in @(get-triplets) + @(get-androidtriplets)) {
             @(get-depports $t | ?{ $_ -like 'curl*' }) |
                 should -be @('curl[core,openssl]')
         }
@@ -1201,7 +1203,7 @@ describe 'get-depports' {
         # consumer restoring curl without an openssl beside it compiles
         # OpenSSL from source, so it needs a package of its own on every
         # triplet all the same.
-        foreach ($t in @($TRIPLETS) + @($ANDROID_TRIPLETS)) {
+        foreach ($t in @(get-triplets) + @(get-androidtriplets)) {
             port_names (get-depports $t) | should -contain 'curl'
             port_names (get-depports $t) | should -contain 'openssl'
             port_names (get-depports $t) | should -contain 'expat'
@@ -1215,11 +1217,11 @@ describe 'get-depports' {
         $xp   = @(get-depports 'x86-mingw-static')
         $full = @(get-depports 'x64-windows-static')
 
-        $xp.Count | should -be ($full.Count - @($XP_SKIP_PORTS).Count)
+        $xp.Count | should -be ($full.Count - @(get-xpskipports).Count)
 
         @($xp | ?{ $_ -notlike 'sdl3*' }) |
             should -be @($full | ?{ $_ -notlike 'sdl3*' -and
-                                    ($_ -replace '\[[^\]]+\]', '') -notin $XP_SKIP_PORTS })
+                                    ($_ -replace '\[[^\]]+\]', '') -notin (get-xpskipports) })
     }
 
     it 'leaves icu out of every list' {
@@ -1275,8 +1277,8 @@ describe 'Qt feature sets' {
         # `core` is the token that does it. Without it every name below is an
         # addition to vcpkg's defaults rather than the whole of what gets
         # built, and the ports this list exists to exclude come back.
-        $QT_FEATURES         | should -contain 'core'
-        $ANDROID_QT_FEATURES | should -contain 'core'
+        (get-qtfeatures)        | should -contain 'core'
+        (get-androidqtfeatures) | should -contain 'core'
     }
 
     it 'names what the Qt frontend links' {
@@ -1285,7 +1287,7 @@ describe 'Qt feature sets' {
         # feature of its own and arrives with widgets; OpenGLWidgets arrives
         # with opengl.
         foreach ($f in 'gui', 'widgets', 'opengl', 'network') {
-            $QT_FEATURES | should -contain $f
+            (get-qtfeatures) | should -contain $f
         }
     }
 
@@ -1296,45 +1298,45 @@ describe 'Qt feature sets' {
         foreach ($f in 'sql', 'sql-psql', 'sql-sqlite', 'icu', 'openssl',
                        'testlib', 'concurrent', 'dnslookup', 'sessionmanager',
                        'brotli', 'zstd') {
-            $QT_FEATURES         | should -not -contain $f
+            (get-qtfeatures)        | should -not -contain $f
         }
         foreach ($f in 'sql', 'sql-psql', 'sql-sqlite', 'icu', 'openssl',
                        'concurrent', 'dnslookup', 'sessionmanager',
                        'brotli', 'zstd') {
-            $ANDROID_QT_FEATURES | should -not -contain $f
+            (get-androidqtfeatures) | should -not -contain $f
         }
     }
 
     it 'gives Android the Qt Test that wxQt links' {
         # wxQt's build/cmake/toolkit.cmake asks find_package for Qt6 Test, and
         # the wxwidgets port does not declare it, so it has to be named here.
-        $ANDROID_QT_FEATURES | should -contain 'testlib'
+        (get-androidqtfeatures) | should -contain 'testlib'
     }
 
     it 'gives Android GLES instead of the desktop extras' {
         # src/wx links Core, Gui, Widgets, PrintSupport and, under ENABLE_GLES,
         # OpenGLWidgets. It opens no socket, and windeployqt is a Windows tool
         # that belongs to the host copy of Qt, which is the one that runs.
-        $ANDROID_QT_FEATURES | should -contain 'egl'
-        $ANDROID_QT_FEATURES | should -contain 'gles2'
+        (get-androidqtfeatures) | should -contain 'egl'
+        (get-androidqtfeatures) | should -contain 'gles2'
 
-        $ANDROID_QT_FEATURES | should -not -contain 'network'
-        $ANDROID_QT_FEATURES | should -not -contain 'windeployqt'
+        (get-androidqtfeatures) | should -not -contain 'network'
+        (get-androidqtfeatures) | should -not -contain 'windeployqt'
     }
 
     it 'asks the platform for what only the platform has' {
         # vcpkg rejects a feature whose platform expression excludes the
         # triplet, so these can only be named where they apply.
         if ($iswindows) {
-            $QT_FEATURES | should -contain 'windeployqt'
-            $QT_FEATURES | should -not -contain 'xcb'
+            (get-qtfeatures) | should -contain 'windeployqt'
+            (get-qtfeatures) | should -not -contain 'xcb'
         }
         elseif ($islinux) {
             # Without these Qt builds a copy that cannot open a window.
             foreach ($f in 'xcb', 'xcb-sm', 'xcb-xlib', 'xrender', 'fontconfig') {
-                $QT_FEATURES | should -contain $f
+                (get-qtfeatures) | should -contain $f
             }
-            $QT_FEATURES | should -not -contain 'windeployqt'
+            (get-qtfeatures) | should -not -contain 'windeployqt'
         }
     }
 
@@ -1346,14 +1348,14 @@ describe 'Qt feature sets' {
         # a Linux builder -- an X11 Qt for a device with no X server.
         foreach ($f in 'windeployqt', 'xcb', 'xcb-sm', 'xcb-xlib', 'xrender',
                        'fontconfig', 'dbus') {
-            $ANDROID_QT_FEATURES | should -not -contain $f
+            (get-androidqtfeatures) | should -not -contain $f
         }
     }
 
     it 'names no feature twice' {
         # The same mistake put egl in the Android list twice, once from the
         # Linux desktop additions and once as Android's own.
-        foreach ($set in $QT_FEATURES, $COMMON_QT_FEATURES, $ANDROID_QT_FEATURES) {
+        foreach ($set in (get-qtfeatures), (get-commonqtfeatures), (get-androidqtfeatures)) {
             @($set).Count | should -be @($set | select -unique).Count
         }
     }
@@ -1361,10 +1363,10 @@ describe 'Qt feature sets' {
     it 'adds nothing to Android beyond GLES and what wxQt needs' {
         # Everything Android asks for is either the common set, the two
         # features that make it draw through GLES, or testlib for wxQt.
-        foreach ($f in $ANDROID_QT_FEATURES) {
+        foreach ($f in (get-androidqtfeatures)) {
             if ($f -in 'egl', 'gles2', 'testlib') { continue }
 
-            $COMMON_QT_FEATURES | should -contain $f
+            (get-commonqtfeatures) | should -contain $f
         }
     }
 
@@ -1373,13 +1375,13 @@ describe 'Qt feature sets' {
         # carry what the emulator links, the same as the cross targets do,
         # and the host copy gets that set by being built before the passes
         # that would otherwise pull it in with the port's defaults.
-        foreach ($t in $TRIPLETS) {
+        foreach ($t in (get-triplets)) {
             $qt = @(get-depports $t | ?{ $_ -like 'qtbase*' })
 
             # x86-mingw-static is the XP target and gets no Qt at all.
             if (-not $qt) { continue }
 
-            $qt | should -be @("qtbase[$($QT_FEATURES -join ',')]")
+            $qt | should -be @("qtbase[$($(get-qtfeatures) -join ',')]")
         }
     }
 
@@ -1387,16 +1389,16 @@ describe 'Qt feature sets' {
         $desktop = @(get-depports 'x64-mingw-static' | ?{ $_ -like 'qtbase*' })
         $android = @(get-depports 'arm64-android'    | ?{ $_ -like 'qtbase*' })
 
-        $desktop | should -be @("qtbase[$($QT_FEATURES -join ',')]")
-        $android | should -be @("qtbase[$($ANDROID_QT_FEATURES -join ',')]")
+        $desktop | should -be @("qtbase[$($(get-qtfeatures) -join ',')]")
+        $android | should -be @("qtbase[$($(get-androidqtfeatures) -join ',')]")
     }
 }
 
 describe 'get-hostdepports' {
 
     it 'gives the host tooling to a triplet that can host a build' {
-        foreach ($t in $HOST_TRIPLETS) {
-            @(get-hostdepports $t) | should -be @($HOST_DEP_PORTS)
+        foreach ($t in (get-buildhosts)) {
+            @(get-hostdepports $t) | should -be @(get-hosttools)
         }
     }
 
@@ -1409,13 +1411,13 @@ describe 'get-hostdepports' {
             & { param([string[]]$host_triplets) @(get-hostdepports (get-hosttriplet)) } @()
         }
 
-        @($got) | should -be @($HOST_DEP_PORTS)
+        @($got) | should -be @(get-hosttools)
     }
 
     it 'names glslang with its tools feature' {
         # The executables are the point; the libraries arrive transitively
         # under the ports that link them.
-        $HOST_DEP_PORTS | should -contain 'glslang[tools]'
+        (get-hosttools) | should -contain 'glslang[tools]'
     }
 
     it 'gives a cross target none of it' {
@@ -1433,15 +1435,15 @@ describe 'get-hostdepports' {
     it 'is included in the names --packages accepts' {
         # vcpkg-daily.ps1 validates --packages/--skip-packages against this,
         # and these ports are part of what a host triplet builds.
-        foreach ($n in @($HOST_DEP_PORT_NAMES)) { $n | should -bein $ALL_DEP_PORT_NAMES }
+        foreach ($n in @(get-hosttoolnames)) { $n | should -bein (get-allportnames) }
     }
 
     it 'is not in the list every triplet links' {
-        # Kept out of $DEP_PORTS: that list is what a build links, which every
+        # Kept out of get-depports: that list is what a build links, which every
         # triplet needs its own copy of.
-        foreach ($n in @($HOST_DEP_PORT_NAMES)) {
-            $n | should -not -bein (& $script:vbam { $DEP_PORT_NAMES })
-            $n | should -not -bein (& $script:vbam { $ANDROID_DEP_PORT_NAMES })
+        foreach ($n in @(get-hosttoolnames)) {
+            $n | should -not -bein (get-portnames)
+            $n | should -not -bein (get-androidportnames)
         }
     }
 }
@@ -1522,8 +1524,8 @@ describe 'get-hostports' {
         # the Android host set the union over all five.
         $asked = [collections.generic.list[string]]::new()
         $src   = { param($t) $global:LASTEXITCODE = 0; $asked.add($t); @() }.GetNewClosure()
-        get-hostports $ANDROID_TRIPLETS 'x64-windows' $src | out-null
-        $asked | should -be $ANDROID_TRIPLETS
+        get-hostports (get-androidtriplets) 'x64-windows' $src | out-null
+        $asked | should -be (get-androidtriplets)
     }
 
     it 'unions the features every triplet asked for' {
@@ -1531,13 +1533,13 @@ describe 'get-hostports' {
             'arm64-android' = @('  * qtbase[core,gui]:x64-windows@6.11.2')
             '*'             = @('  * qtbase[core,widgets]:x64-windows@6.11.2')
         }
-        get-hostports $ANDROID_TRIPLETS 'x64-windows' (plan_source $plans) |
+        get-hostports (get-androidtriplets) 'x64-windows' (plan_source $plans) |
             should -be @('qtbase[gui,widgets]')
     }
 
     it 'lists a package once however many triplets named it' {
         $plan = @('  * zlib:x64-windows@1.3.2#2')
-        @(get-hostports $ANDROID_TRIPLETS 'x64-windows' (plan_source @{ '*' = $plan })).count |
+        @(get-hostports (get-androidtriplets) 'x64-windows' (plan_source @{ '*' = $plan })).count |
             should -be 1
     }
 
@@ -1549,13 +1551,13 @@ describe 'get-hostports' {
             '*'               = @('  * zlib:x64-windows@1.3.2#2')
         }
         $src = plan_source $plans @{ 'riscv64-android' = 1 }
-        get-hostports $ANDROID_TRIPLETS 'x64-windows' $src 3>$null | should -be @('zlib')
+        get-hostports (get-androidtriplets) 'x64-windows' $src 3>$null | should -be @('zlib')
     }
 
     it 'says which triplet it could not plan' {
         $plans = @{ 'riscv64-android' = @('error: no such triplet'); '*' = @() }
         $src   = plan_source $plans @{ 'riscv64-android' = 1 }
-        $warnings = @(get-hostports $ANDROID_TRIPLETS 'x64-windows' $src 3>&1 |
+        $warnings = @(get-hostports (get-androidtriplets) 'x64-windows' $src 3>&1 |
             ?{ $_ -is [management.automation.warningrecord] })
         "$warnings" | should -belike '*riscv64-android*x64-windows*no such triplet*'
     }
@@ -1837,7 +1839,7 @@ describe 'save-buildlogs' {
 describe 'test-wholerun' {
 
     it 'calls a default run whole' {
-        test-wholerun @($TRIPLETS) | should -be $true
+        test-wholerun @(get-triplets) | should -be $true
     }
 
     it 'does not call a run narrowed to one triplet whole' {
@@ -1848,19 +1850,19 @@ describe 'test-wholerun' {
     }
 
     it 'does not call a run narrowed to one package whole' {
-        test-wholerun @($TRIPLETS) @('sdl3') | should -be $false
+        test-wholerun @(get-triplets) @('sdl3') | should -be $false
     }
 
     it 'does not call a run with --skip-packages whole' {
-        test-wholerun @($TRIPLETS) @() @('ffmpeg') | should -be $false
+        test-wholerun @(get-triplets) @() @('ffmpeg') | should -be $false
     }
 
     it 'ignores the order the triplets come in' {
-        test-wholerun @($TRIPLETS | sort-object) | should -be $true
+        test-wholerun @((get-triplets) | sort-object) | should -be $true
     }
 
     it 'does not call a subset whole even when it is all but one' {
-        test-wholerun @($TRIPLETS | select-object -skip 1) | should -be $false
+        test-wholerun @((get-triplets) | select-object -skip 1) | should -be $false
     }
 
     it 'is not fooled by a parameter that shadows the platform list' {
@@ -1890,16 +1892,16 @@ describe 'get-vcpkgtrees' {
     it 'names the default checkout first' {
         # Both scripts take these in the order they come back, so the order is
         # the whole reason two runs asking for the set cannot deadlock.
-        @(get-vcpkgtrees)[0] | should -be (join-path $REPOS_ROOT vcpkg)
+        @(get-vcpkgtrees)[0] | should -be (join-path (get-reposroot) vcpkg)
     }
 
     it 'names one tree per toolkit beside it' {
         $paths = @(get-vcpkgtrees)
-        $root  = join-path $REPOS_ROOT vcpkg
+        $root  = join-path (get-reposroot) vcpkg
 
-        $paths.count | should -be (1 + @($TOOLKITS | ?{ $_ }).count)
+        $paths.count | should -be (1 + @((get-toolkits) | ?{ $_ }).count)
 
-        foreach ($tk in @($TOOLKITS | ?{ $_ })) {
+        foreach ($tk in @((get-toolkits) | ?{ $_ })) {
             $paths | should -contain "$root-$tk"
         }
     }
@@ -1918,7 +1920,7 @@ describe 'get-vcpkgtrees' {
         # is here to catch.
         $tks = @((resolve-triplets --triplets x64-windows-static).Toolkits | ?{ $_ })
 
-        $tks | should -be @($TOOLKITS | ?{ $_ })
+        $tks | should -be @((get-toolkits) | ?{ $_ })
     }
 }
 
@@ -2039,7 +2041,7 @@ describe 'lock-git kinds' {
 describe 'get-freespace' {
 
     it 'answers with a positive number for a path that exists' {
-        $free = get-freespace $REPOS_ROOT
+        $free = get-freespace (get-reposroot)
 
         $free | should -not -be $null
         $free | should -begreaterthan 0
@@ -2056,7 +2058,7 @@ describe 'get-freespace' {
 describe 'show-freespace' {
 
     it 'records the number and the volume it is for' {
-        $out = @(show-freespace $REPOS_ROOT 3>$null)
+        $out = @(show-freespace (get-reposroot) 3>$null)
 
         ($out -join "`n") | should -match 'INFO: [0-9.]+ GB free on '
     }
@@ -2578,6 +2580,17 @@ describe 'script scope reads' {
         }
 
         @($unqualified) | should -be @()
+    }
+
+    it 'exports no variables of its own' {
+        # The other half of the same thing, and the half $script: cannot fix:
+        # export-modulemember -variable does not hand a value to a caller, it
+        # writes the name into whatever scope ran the import. Importing this
+        # module used to replace a caller's $root with the builder's and a
+        # caller's $triplets with the platform list, case insensitively and
+        # without a word. What it has to say now, it says through get-root,
+        # get-triplets and the rest.
+        @($script:vbam.exportedvariables.keys) | should -be @()
     }
 }
 

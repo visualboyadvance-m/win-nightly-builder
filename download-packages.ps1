@@ -5,10 +5,10 @@ $progresspreference    = 'silentlycontinue'
 
 $build_triplets = resolve-triplets @args
 
-$repo_path = join-path $REPOS_ROOT visualboyadvance-m
+$repo_path = join-path (get-reposroot) visualboyadvance-m
 
 if (-not (test-path $repo_path)) {
-    pushd $REPOS_ROOT
+    pushd (get-reposroot)
 
     git clone git@github.com:visualboyadvance-m/visualboyadvance-m
 
