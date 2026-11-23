@@ -2489,18 +2489,28 @@ describe 'enforce_core_features' {
     }
 }
 
-# ── how the module reads its own variables ──────────────────────────
+# ── how a file reads the variables it keeps ─────────────────────────
 #
-# The three tests above shadow a list and check the answer, which is what a
-# reader wants to see the hazard in. This one is the rule itself, over the
-# whole file and over every variable the module keeps, because the next one
-# of these will be written by someone who has not read them.
+# The shadowing tests above take a list and check the answer, which is what a
+# reader wants to see the hazard in. This is the rule itself, over every file
+# here and every variable one of them keeps, because the next one of these
+# will be written by someone who has not read them.
 
-describe 'module variable reads' {
+describe 'script scope reads' {
 
-    it 'reads every variable of its own as $script:' {
-        $ast = [management.automation.language.parser]::parsefile(
-                   $script:vbam.path, [ref]$null, [ref]$null)
+    beforeall {
+        # Names the language keeps. $_ and $matches are its to set, and a
+        # preference variable is meant to be read out of the caller's scope --
+        # a function setting $erroractionpreference for what it calls is this
+        # same mechanism, used on purpose.
+        $script:automatic = @(
+            '_','psitem','args','input','matches','this','error','null','true','false',
+            'lastexitcode','psboundparameters','psscriptroot','pscommandpath','pscmdlet',
+            'myinvocation','pwd','host','pid','home','foreach','switch','ofs','profile',
+            'executioncontext','iswindows','islinux','ismacos','psversiontable','shellid',
+            'erroractionpreference','progresspreference','outputencoding','psdefaultparametervalues',
+            'informationpreference','verbosepreference','warningpreference','debugpreference',
+            'confirmpreference','whatifpreference')
 
         function script:is_in_function($node) {
             while ($node = $node.parent) {
@@ -2510,38 +2520,58 @@ describe 'module variable reads' {
             $false
         }
 
-        function script:assigned_names($node) {
-            @($node.findall({
+        # Every name a scope introduces: what it assigns, what it loops over
+        # and what it takes as a parameter.
+        function script:bound_names($ast, [switch]$nested) {
+            $assigned = @($ast.findall({
                 param($n)
 
                 $n -is [management.automation.language.assignmentstatementast] -and
                     $n.left -is [management.automation.language.variableexpressionast]
-            }, $true))
+            }, $true) | ?{ $nested -or -not (is_in_function $_) } |
+                %{ $_.left.variablepath.userpath })
+
+            $looped = @($ast.findall({
+                param($n) $n -is [management.automation.language.foreachstatementast]
+            }, $true) | ?{ $nested -or -not (is_in_function $_) } |
+                %{ $_.variable.variablepath.userpath })
+
+            $taken = @($ast.findall({
+                param($n) $n -is [management.automation.language.parameterast]
+            }, $true) | ?{ $nested -or -not (is_in_function $_) } |
+                %{ $_.name.variablepath.userpath })
+
+            @(@($assigned) + @($looped) + @($taken) | ?{ $_ } | %{ $_.tolower() } | sort-object -unique)
         }
+    }
 
-        # What the module keeps: everything it assigns outside a function.
-        $module_vars = @(assigned_names $ast | ?{ -not (is_in_function $_) } |
-                             %{ $_.left.variablepath.userpath.tolower() } | sort-object -unique)
+    it 'reads what <_> keeps at script scope as $script:' -foreach @(
+            gci (join-path (split-path $script:vbam.path) '*') -include '*.ps1','*.psm1' |
+                %{ $_.name } | sort-object) {
 
-        # The scan found the file, not an empty parse of it.
-        $module_vars | should -contain 'triplets'
+        $path   = join-path (split-path $script:vbam.path) $_
+        $errors = $null
+        $ast    = [management.automation.language.parser]::parsefile($path, [ref]$null, [ref]$errors)
+
+        # Reading the file is half of what this does, so a file that does not
+        # parse fails here rather than quietly having nothing to look at.
+        @($errors) | should -be @()
+
+        $kept = @(bound_names $ast | ?{ $_ -notin $script:automatic })
 
         $unqualified = foreach ($f in $ast.findall({
                 param($n) $n -is [management.automation.language.functiondefinitionast] }, $true)) {
 
-            # A name the function takes or sets is its own, whatever the module
-            # calls something of the same name.
-            $own = @(@($f.body.paramblock.parameters) + @($f.parameters) |
-                         ?{ $_ } | %{ $_.name.variablepath.userpath }) +
-                   @(assigned_names $f.body | %{ $_.left.variablepath.userpath })
-
-            $own = @($own | ?{ $_ } | %{ $_.tolower() })
+            # A name the function takes, sets or loops over is its own,
+            # whatever the file calls something of the same name.
+            $own = @(bound_names $f -nested) +
+                   @(@($f.parameters) | ?{ $_ } | %{ $_.name.variablepath.userpath.tolower() })
 
             $f.body.findall({
                 param($n) $n -is [management.automation.language.variableexpressionast]
             }, $true) | ?{
                 $_.variablepath.isunqualified -and
-                    ($_.variablepath.userpath.tolower() -in $module_vars) -and
+                    ($_.variablepath.userpath.tolower() -in $kept) -and
                     ($_.variablepath.userpath.tolower() -notin $own)
             } | %{ "$($f.name) line $($_.extent.startlinenumber): `$$($_.variablepath.userpath)" }
         }

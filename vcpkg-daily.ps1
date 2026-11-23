@@ -29,6 +29,12 @@ if (-not (get-command start-threadjob -ea ignore)) {
 $stage_root = "$env:TEMP/vbam-daily-packages"
 $stage_dir  = "$stage_root/$PID"
 
+# $script:packages and $script:skip_packages wherever a function reads these,
+# the same rule vbam-builder.psm1's header sets out and for the sharper reason:
+# add_pack_unit takes a $packages of its own, and a function reads an
+# unqualified name out of the scope of whichever function called it. Read
+# these unqualified and the filters are one call away from being a pack unit's
+# package list rather than what the run was asked to build.
 $packages          = $null
 $skip_packages     = @()
 $disable_wx_update = $false
@@ -68,8 +74,8 @@ if ($skip_packages) {
 # The --packages/--skip-packages filters then apply to whichever list that is.
 function selected_ports([string]$triplet) {
     $ports = @(get_dep_ports $triplet) + @(get_host_dep_ports $triplet)
-    if ($packages)      { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -in $packages } }
-    if ($skip_packages) { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $skip_packages } }
+    if ($script:packages)      { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -in $script:packages } }
+    if ($script:skip_packages) { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $script:skip_packages } }
     @($ports)
 }
 
@@ -94,8 +100,8 @@ function android_host_ports([string]$triplet) {
 
     # The same filters the triplet's own list gets: these are part of what a
     # host triplet builds, so --packages/--skip-packages select within them too.
-    if ($packages)      { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -in $packages } }
-    if ($skip_packages) { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $skip_packages } }
+    if ($script:packages)      { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -in $script:packages } }
+    if ($script:skip_packages) { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $script:skip_packages } }
 
     @($ports)
 }
@@ -670,15 +676,15 @@ function add_pack_unit([string]$triplet, [string]$toolkit, [string[]]$packages) 
 
     $key = "$triplet|$toolkit"
 
-    if (-not $pack_units.contains($key)) {
-        $pack_units[$key] = [PSCustomObject]@{
+    if (-not $script:pack_units.contains($key)) {
+        $script:pack_units[$key] = [PSCustomObject]@{
             Triplet  = $triplet
             Toolkit  = $toolkit
             Packages = @()
         }
     }
 
-    $unit          = $pack_units[$key]
+    $unit          = $script:pack_units[$key]
     $unit.Packages = @(@($unit.Packages) + @($packages) | select-object -unique)
 }
 
