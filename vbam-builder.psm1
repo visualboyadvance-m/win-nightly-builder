@@ -244,6 +244,15 @@ $HOST_DEP_PORT_NAMES = $HOST_DEP_PORTS -replace '\[[^\]]+\]',''
 $ALL_DEP_PORT_NAMES = @($DEP_PORT_NAMES) + @($ANDROID_DEP_PORT_NAMES) + @($HOST_DEP_PORT_NAMES) |
                       select-object -unique
 
+# A function here reads one of these lists as $script:TRIPLETS, never as
+# $TRIPLETS. Variable names are case insensitive, and a function of this
+# module's reads an unqualified name out of the scope of whichever of its
+# functions called it, so a $triplets held anywhere down that chain is what
+# such a read gives back in place of the platform's list. A caller outside the
+# module cannot do it -- a module has a session state of its own -- and
+# nothing here takes a parameter by that name any more: the two that did are
+# $run_triplets and $for_triplets now. The qualification is the half of it
+# that a later parameter name cannot undo.
 $TRIPLETS       = if ($iswindows) {
 		      'x86-mingw-static','x64-mingw-static',(echo x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }) | echo
 		  } elseif ($islinux) {
@@ -1267,9 +1276,9 @@ function get-triplets {
         # to select, and building one under a toolkit that does not apply to
         # it is never what was meant.
         $requested_triplets = if ($toolkit) {
-            @($TRIPLETS | ?{ $_ -match $toolkit_triplet_re })
+            @($script:TRIPLETS | ?{ $_ -match $toolkit_triplet_re })
         } else {
-            $TRIPLETS
+            $script:TRIPLETS
         }
     }
 
@@ -1278,7 +1287,7 @@ function get-triplets {
             write-error 'the Android triplets are only built on Linux and macOS' -ea stop
         }
 
-        $requested_triplets = @($requested_triplets) + @($ANDROID_TRIPLETS) | select -unique
+        $requested_triplets = @($requested_triplets) + @($script:ANDROID_TRIPLETS) | select -unique
     }
 
     # The host triplet goes first, whatever order it was named in.
@@ -1367,7 +1376,7 @@ function get_dep_ports([string]$triplet = '') {
 # for the wrong machine. Kept apart from get_dep_ports because that list is what
 # a build *links*, which every triplet needs a copy of.
 function get_host_dep_ports([string]$triplet = '') {
-    if ("$triplet" -in $HOST_TRIPLETS) { $HOST_DEP_PORTS } else { @() }
+    if ("$triplet" -in $script:HOST_TRIPLETS) { $HOST_DEP_PORTS } else { @() }
 }
 
 # Plans already read, keyed by triplet, host triplet and the tree they came
@@ -1506,7 +1515,7 @@ function planned_features([string]$triplet, [string]$host_triplet,
     $features
 }
 
-# The host packages a build of $triplets puts on $host_triplet, as vcpkg
+# The host packages a build of $for_triplets puts on $host_triplet, as vcpkg
 # install specs: the port name plus whatever features the plan asks for. Every
 # triplet is planned with its own port list and the results are unioned, so
 # asking about all five Android triplets at once gives the set any of them
@@ -1549,7 +1558,7 @@ function planned_features([string]$triplet, [string]$host_triplet,
 # parameter so the parsing below can be checked against a captured plan
 # without a vcpkg to run; nothing but the tests passes it, and a plan it
 # supplies is never cached.
-function get_host_ports([string[]]$triplets, [string]$host_triplet,
+function get_host_ports([string[]]$for_triplets, [string]$host_triplet,
                         [scriptblock]$plan_for = $null, [switch]$Tools) {
     $features     = [ordered]@{}
     # Ports the plan puts on some triplet other than the host's: what the build
@@ -1557,7 +1566,7 @@ function get_host_ports([string[]]$triplets, [string]$host_triplet,
     # $features that never turns up here.
     $target_ports = @{}
 
-    foreach ($t in $triplets) {
+    foreach ($t in $for_triplets) {
         foreach ($line in @(get_install_plan $t $host_triplet $plan_for)) {
             # "  * icu[core,tools]:x64-windows@78.3#2", with " -- <port dir>"
             # after the version for an overlay port. Both the packages the plan
@@ -1627,10 +1636,11 @@ function get_host_ports([string[]]$triplets, [string]$host_triplet,
 # Naming a package or a triplet narrows it. The order the triplets arrive in
 # does not matter, only the set.
 #
-# $script:TRIPLETS rather than $TRIPLETS: PowerShell variable names are case
-# insensitive, so a parameter called $triplets -- which refresh_host_tools has
-# -- is the same variable, and reading it unqualified in such a function gets
-# the argument instead of the platform's list.
+# $script:TRIPLETS rather than $TRIPLETS, for the reason given where the lists
+# are defined. It matters more here than anywhere: read the caller's triplets
+# as the platform's and every narrowed run compares equal to itself and comes
+# out whole, which is the answer that lets a refresh take 39 packages out of a
+# run that is building one.
 function is_whole_run([string[]]$run_triplets,
                       [string[]]$packages = @(), [string[]]$skip_packages = @()) {
     if ($packages -or $skip_packages) { return $false }
@@ -1645,7 +1655,7 @@ function is_whole_run([string[]]$run_triplets,
 # building the lot puts them back. `--triplets x86-mingw-static --packages
 # sdl3` removed 39 packages for eight triplets and then rebuilt one, which is
 # the same shape as the failure this function exists to prevent.
-function refresh_host_tools([string[]]$triplets, [string]$host_triplet, [string]$toolkit,
+function refresh_host_tools([string[]]$run_triplets, [string]$host_triplet, [string]$toolkit,
                             [switch]$WholeRun) {
     if (-not $host_triplet) { return }
 
@@ -1655,7 +1665,7 @@ function refresh_host_tools([string[]]$triplets, [string]$host_triplet, [string]
     # below is about to install anyway. Ask about the triplets that are not it
     # -- they are the ones whose packages carry a host dependency that can
     # widen a plan -- and where the run has none, there is nothing to widen to.
-    $cross = @($triplets | ?{ "$_" -ne $host_triplet })
+    $cross = @($run_triplets | ?{ "$_" -ne $host_triplet })
 
     if (-not $cross) { return }
 

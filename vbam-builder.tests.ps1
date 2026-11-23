@@ -1051,6 +1051,21 @@ describe 'get-triplets' {
 
             @(get-triplets | %{ "$_" }) | should -be @($expected)
         }
+
+        it 'falls back to it past a caller of its own holding a $triplets' {
+            # Names are case insensitive and a module function reads an
+            # unqualified one out of the scope of whichever of its own
+            # functions called it, so a $triplets held there is what an
+            # unqualified $TRIPLETS gives back, and a run of everything comes
+            # out narrowed to whatever that caller was holding. The shadowing
+            # has to happen inside the module: a caller outside it reads
+            # nothing of the module's, so it cannot show this either way.
+            $got = & $script:vbam {
+                & { param([string[]]$triplets) @(get-triplets | %{ "$_" }) } @(get_host_triplet)
+            }
+
+            @($got) | should -be @(get-triplets | %{ "$_" })
+        }
     }
 
     describe 'unknown arguments' {
@@ -1115,8 +1130,8 @@ describe 'HOST_TRIPLETS' {
     }
 
     it 'is drawn from the triplets this platform builds' {
-        $triplets = & $script:vbam { $TRIPLETS }
-        $HOST_TRIPLETS | %{ $_ | should -bein $triplets }
+        $platform_triplets = & $script:vbam { $TRIPLETS }
+        $HOST_TRIPLETS | %{ $_ | should -bein $platform_triplets }
     }
 }
 
@@ -1382,6 +1397,18 @@ describe 'get_host_dep_ports' {
         foreach ($t in $HOST_TRIPLETS) {
             @(get_host_dep_ports $t) | should -be @($HOST_DEP_PORTS)
         }
+    }
+
+    it 'answers past a caller of its own holding a $host_triplets' {
+        # The same shadowing as the platform list, one list along: a function
+        # in the module holding an empty $host_triplets would make every
+        # triplet a cross target, and leave the builder without the tooling it
+        # builds with.
+        $got = & $script:vbam {
+            & { param([string[]]$host_triplets) @(get_host_dep_ports (get_host_triplet)) } @()
+        }
+
+        @($got) | should -be @($HOST_DEP_PORTS)
     }
 
     it 'names glslang with its tools feature' {
@@ -1837,12 +1864,23 @@ describe 'is_whole_run' {
 
     it 'is not fooled by a parameter that shadows the platform list' {
         # PowerShell variable names are case insensitive, so a parameter named
-        # $triplets is the same variable as $TRIPLETS. Reading it unqualified
-        # inside such a function returns the argument, and every subset then
-        # compares equal to itself and looks like a whole run.
-        function shadow([string[]]$triplets) { is_whole_run $triplets }
+        # $triplets is the same variable as $TRIPLETS, and a module function
+        # reads an unqualified name out of the scope of whichever of its own
+        # functions called it. Read that way, this one would get the argument
+        # back, every subset would compare equal to itself, and a run of one
+        # triplet would come out whole -- which is the answer that lets a
+        # refresh take 39 packages out of a run building one.
+        #
+        # Hence a caller inside the module: one outside reads none of the
+        # module's variables, so it cannot shadow them and cannot show this.
+        # The name is the point of this test and the only one left in the
+        # tree, the module's own parameters being $run_triplets and
+        # $for_triplets so that no function of its own can do it.
+        $got = & $script:vbam {
+            & { param([string[]]$triplets) is_whole_run $triplets } @('x86-mingw-static')
+        }
 
-        shadow @('x86-mingw-static') | should -be $false
+        $got | should -be $false
     }
 }
 
