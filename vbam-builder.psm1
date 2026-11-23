@@ -1374,6 +1374,138 @@ function get_host_dep_ports([string]$triplet = '') {
 # from. See get_host_ports below.
 $script:host_plans = @{}
 
+# vcpkg's own install plan for one triplet, as the lines vcpkg prints it in,
+# worked out without building anything.
+#
+# Every reader of a plan goes through here, so the overlay triplets, the empty
+# install root and the caching are settled in one place rather than once per
+# caller.
+#
+# A triplet vcpkg cannot plan is a warning and an empty plan, not the end of a
+# nightly: riscv64-android is the one that can go missing. A caller that needs
+# the plan to be right about something decides for itself what to do without
+# one -- enforce_core_features leaves every feature set alone rather than
+# narrow one on a guess.
+function get_install_plan([string]$triplet, [string]$host_triplet,
+                          [scriptblock]$plan_for = $null) {
+    # The plan is captured with 2>&1 so a failure can be reported with what
+    # vcpkg said about it. Under Windows PowerShell -- which is what the
+    # scheduled task runs -- a native command's redirected stderr becomes an
+    # error record, and the caller's erroractionpreference of stop turns the
+    # first one of those into a terminating error, so a triplet vcpkg merely
+    # grumbled about would take the whole nightly down instead of the warning
+    # below. This is scoped to the function and restored on the way out.
+    $erroractionpreference = 'continue'
+
+    # The same plan answers every question asked about a triplet -- the host
+    # ports, -Tools, the feature sets -- and a host triplet is asked about once
+    # per toolkit, so read vcpkg once and keep it. The tree it was read from is
+    # part of the key: on Windows every toolkit has its own, and VCPKG_ROOT is
+    # what setup_build_env moves.
+    $key = "$triplet|$host_triplet|$env:VCPKG_ROOT|$env:VCPKG_OVERLAY_PORTS"
+
+    if ((-not $plan_for) -and $script:host_plans.contains($key)) {
+        return $script:host_plans[$key]
+    }
+
+    # riscv64-android has no triplet in vcpkg itself, only in the overlay, and
+    # on Windows VCPKG_OVERLAY_TRIPLETS points at the per-toolkit directory
+    # instead. Name the overlay's own triplets directory for the plan so all
+    # five Android triplets resolve on every platform: vcpkg reads this
+    # alongside the environment, and repeating a directory it already has
+    # changes nothing.
+    $overlay_triplets = join-path `
+        $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS }) `
+        'triplets/community'
+
+    $overlay_args = if (test-path $overlay_triplets) { @('--overlay-triplets', $overlay_triplets) } else { @() }
+
+    # Planned against an install root of its own, which stays empty because
+    # --dry-run never writes packages into one. vcpkg leaves an already
+    # installed package out of a plan entirely unless it was named on the
+    # command line -- it treats one as satisfied whatever version it is -- so
+    # read against the real tree this returns everything that is missing today
+    # and nothing that was built yesterday. The host Qt would then drop out of
+    # the port list the run after it was first built, stop being upgraded by
+    # name, and sit at that version for good. Against an empty root the answer
+    # is the whole set every time, which is the question being asked: what does
+    # a build of this put where.
+    $plan_root = join-path $env:TEMP 'vbam-host-plan-root'
+
+    $default_plan_for = {
+        param($t)
+
+        $ports = @(get_dep_ports $t)
+
+        vcpkg install --dry-run @overlay_args --x-install-root=$plan_root `
+            --triplet $t --host-triplet $host_triplet `
+            --allow-unsupported --recurse @ports 2>&1
+    }
+
+    $plan = & $(if ($plan_for) { $plan_for } else { $default_plan_for }) $triplet
+
+    # One triplet vcpkg cannot plan is not worth failing a nightly over, and
+    # the host set barely differs between Android architectures, so the others
+    # cover it. Name the triplet anyway, so one that quietly stops resolving is
+    # still visible in the log.
+    if ($lastexitcode -ne 0) {
+        write-warning ("could not compute the install plan for $triplet on ${host_triplet}: " +
+                       ((@($plan | %{ "$_" }) -join "`n").trim()))
+        return @()
+    }
+
+    if (-not $plan_for) { $script:host_plans[$key] = $plan }
+
+    $plan
+}
+
+# What vcpkg would install for each port of a triplet's list: port name to the
+# feature set it works out, core included. A plan it cannot compute gives
+# nothing back.
+#
+# That set and the one the port list names are not the same, and the
+# difference is not a mistake in the list. A port's features depend on other
+# features of the same port -- qtbase's async-io asks for future, xcb asks for
+# xkbcommon-x11 and xlib, xcb-sm asks for sessionmanager -- and a port can ask
+# for features of itself per platform: qtbase declares qtbase[concurrent,thread]
+# on android and qtbase[cups,thread] on osx. vcpkg installs the closure of all
+# that and records the closure as what is installed, so a list naming the
+# features the build actually wants can never equal what ends up on disk.
+#
+# enforce_core_features compared the two and found qtbase widened on every
+# triplet of every run: it removed it, vcpkg reinstalled the same closure, and
+# the next run found the same difference again. On 2026-11-22 that was twelve
+# qtbase and qttools rebuilt three times over on posixsh alone -- and since a
+# removal crosses triplets, one false positive on the host triplet took all
+# five Android copies with it each time.
+#
+# The closure comes from vcpkg rather than from reading the port's vcpkg.json
+# here so that the feature graph and the platform gates are read the way the
+# build itself reads them.
+#
+# platform-default-features is kept in the set rather than dropped: it is how a
+# plan says the port's defaults are still on, which means what gets installed
+# is not what the plan lists. A caller comparing against an installed set has
+# to leave such a port alone, and this is what tells it to.
+function planned_features([string]$triplet, [string]$host_triplet,
+                          [scriptblock]$plan_for = $null) {
+    $features = @{}
+
+    foreach ($line in @(get_install_plan $triplet $host_triplet $plan_for)) {
+        # "  * qtbase[core,gui]:arm64-android@6.11.2#2", with " -- <port dir>"
+        # after the version for an overlay port.
+        if ("$line" -notmatch '^\s*\*?\s*([^\s:\[\]]+)(?:\[([^\]]*)\])?:([^\s@]+)@') { continue }
+
+        if ($matches[3] -ne $triplet) { continue }
+
+        $fs = @(@('core') + @($matches[2] -split ',' | %{ $_.trim() } | ?{ $_ }))
+
+        $features[$matches[1]] = @($fs | sort-object -unique)
+    }
+
+    $features
+}
+
 # The host packages a build of $triplets puts on $host_triplet, as vcpkg
 # install specs: the port name plus whatever features the plan asks for. Every
 # triplet is planned with its own port list and the results are unioned, so
@@ -1419,49 +1551,6 @@ $script:host_plans = @{}
 # supplies is never cached.
 function get_host_ports([string[]]$triplets, [string]$host_triplet,
                         [scriptblock]$plan_for = $null, [switch]$Tools) {
-    # The plan is captured with 2>&1 so a failure can be reported with what
-    # vcpkg said about it. Under Windows PowerShell -- which is what the
-    # scheduled task runs -- a native command's redirected stderr becomes an
-    # error record, and the caller's erroractionpreference of stop turns the
-    # first one of those into a terminating error, so a triplet vcpkg merely
-    # grumbled about would take the whole nightly down instead of the warning
-    # below. This is scoped to the function and restored on the way out.
-    $erroractionpreference = 'continue'
-
-    # riscv64-android has no triplet in vcpkg itself, only in the overlay, and
-    # on Windows VCPKG_OVERLAY_TRIPLETS points at the per-toolkit directory
-    # instead. Name the overlay's own triplets directory for the plan so all
-    # five Android triplets resolve on every platform: vcpkg reads this
-    # alongside the environment, and repeating a directory it already has
-    # changes nothing.
-    $overlay_triplets = join-path `
-        $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS }) `
-        'triplets/community'
-
-    $overlay_args = if (test-path $overlay_triplets) { @('--overlay-triplets', $overlay_triplets) } else { @() }
-
-    # Planned against an install root of its own, which stays empty because
-    # --dry-run never writes packages into one. vcpkg leaves an already
-    # installed package out of a plan entirely unless it was named on the
-    # command line -- it treats one as satisfied whatever version it is -- so
-    # read against the real tree this returns everything that is missing today
-    # and nothing that was built yesterday. The host Qt would then drop out of
-    # the port list the run after it was first built, stop being upgraded by
-    # name, and sit at that version for good. Against an empty root the answer
-    # is the whole set every time, which is the question being asked: what does
-    # a build of this put on that host.
-    $plan_root = join-path $env:TEMP 'vbam-host-plan-root'
-
-    $default_plan_for = {
-        param($t)
-
-        $ports = @(get_dep_ports $t)
-
-        vcpkg install --dry-run @overlay_args --x-install-root=$plan_root `
-            --triplet $t --host-triplet $host_triplet `
-            --allow-unsupported --recurse @ports 2>&1
-    }
-
     $features     = [ordered]@{}
     # Ports the plan puts on some triplet other than the host's: what the build
     # links against rather than what it builds with. -Tools is everything in
@@ -1469,34 +1558,7 @@ function get_host_ports([string[]]$triplets, [string]$host_triplet,
     $target_ports = @{}
 
     foreach ($t in $triplets) {
-        # The same plan answers both the full question and -Tools, and a host
-        # triplet is asked about once per toolkit, so read vcpkg once and keep
-        # it. The tree it was read from is part of the key: on Windows every
-        # toolkit has its own, and VCPKG_ROOT is what setup_build_env moves.
-        $key  = "$t|$host_triplet|$env:VCPKG_ROOT|$env:VCPKG_OVERLAY_PORTS"
-        $plan = $null
-
-        if ((-not $plan_for) -and $script:host_plans.contains($key)) {
-            $plan = $script:host_plans[$key]
-        }
-        else {
-            $plan = & $(if ($plan_for) { $plan_for } else { $default_plan_for }) $t
-
-            # One triplet vcpkg cannot plan is not worth failing a nightly
-            # over: riscv64-android is the one that can go missing, and the
-            # host set barely differs between Android architectures, so the
-            # others cover it. Name the triplet anyway, so one that quietly
-            # stops resolving is still visible in the log.
-            if ($lastexitcode -ne 0) {
-                write-warning ("could not compute the $t host deps for ${host_triplet}: " +
-                               ((@($plan | %{ "$_" }) -join "`n").trim()))
-                continue
-            }
-
-            if (-not $plan_for) { $script:host_plans[$key] = $plan }
-        }
-
-        foreach ($line in $plan) {
+        foreach ($line in @(get_install_plan $t $host_triplet $plan_for)) {
             # "  * icu[core,tools]:x64-windows@78.3#2", with " -- <port dir>"
             # after the version for an overlay port. Both the packages the plan
             # would build and the ones it reports already installed are wanted:
@@ -1894,7 +1956,7 @@ function task_action {
 }
 
 export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,XP_SKIP_PORTS,QT_FEATURES,COMMON_QT_FEATURES,ANDROID_QT_FEATURES,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,refresh_host_tools, `
+		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,planned_features,refresh_host_tools, `
 		              installed_package_stamps,archive_build_logs, `
 		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `
 		              is_whole_run,git_lock_path,holds_git_lock,vcpkg_tree_paths, `

@@ -380,11 +380,21 @@ function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
 # [core,openssl] exists to keep out. Every command succeeded, the run said
 # nothing, and the package published for that triplet was multissl.
 #
-# Only a spec naming core is checked, and it is checked by equality: core is
-# how a port says it wants none of its defaults, so the installed set has to be
-# exactly the one asked for. A spec without it -- sdl3[vulkan,libusb] -- means
-# "the defaults and these as well", which cannot be told apart from a set vcpkg
-# has widened.
+# Only a spec naming core is checked: core is how a port says it wants none of
+# its defaults, so what is installed can be held to a known set. A spec without
+# it -- sdl3[vulkan,libusb] -- means "the defaults and these as well", which
+# cannot be told apart from a set vcpkg has widened.
+#
+# The known set is the one vcpkg plans for the triplet, from planned_features,
+# and not the spec itself. A port's features pull in other features of the same
+# port, so what a correct install puts on disk is the closure of the spec
+# rather than the spec -- and held to the spec, qtbase came out widened on
+# every triplet of every run, was removed and rebuilt, and came back the same.
+# planned_features has the whole story.
+#
+# What is checked against it is the extras alone. A feature the plan asks for
+# and the tree has not got needs no remove: vcpkg adds one to an installed
+# package where it stands.
 #
 # This runs where the packages are made rather than where they are built,
 # because that is the last point at which anything can still widen one: the
@@ -455,6 +465,21 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
 
     if (-not $specs) { return }
 
+    # What each of those ports is to be measured against: the feature set vcpkg
+    # works out for this triplet, not the one the list above names. They are
+    # different sets and neither is wrong -- see planned_features, which is
+    # also where the cost of getting this backwards is written down.
+    $planned = planned_features $triplet $host_triplet
+
+    # No plan is no grounds for removing anything. vcpkg has already said why
+    # in a warning of its own; narrowing a feature set on a guess would remove
+    # a package, and everything that depends on it across every triplet, to put
+    # back a set nothing confirmed.
+    if (-not $planned.count) {
+        write-warning "no install plan for $triplet; leaving its feature sets as they are"
+        return
+    }
+
     $listing = @(vcpkg-list)
     $trip_re = [regex]::escape($triplet)
 
@@ -462,9 +487,15 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
         $spec -match '^([^\[]+)\[([^\]]+)\]$' | out-null
 
         $name = $matches[1]
-        $want = @(@($matches[2] -split ',' | %{ $_.trim() } | ?{ $_ }) | sort-object -unique)
 
         if ($wanted -and ($name -notin $wanted)) { continue }
+
+        $want = @($planned["$name"])
+
+        # A port the plan never names is not one this triplet installs, and one
+        # whose defaults the plan kept has a feature set the plan does not
+        # list. Neither is something to narrow.
+        if ((-not $want) -or ('platform-default-features' -in $want)) { continue }
 
         $name_re = [regex]::escape($name)
         $core_re = '^' + $name_re + ':' + $trip_re + '\s+\d'
@@ -484,7 +515,15 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
 
         $have = @($have | sort-object -unique)
 
-        if (-not (compare-object $want $have)) { continue }
+        # Only a feature that is installed and should not be is this pass's to
+        # fix, which is why this is the extras rather than any difference. A
+        # feature the plan asks for and the tree has not got is the install's
+        # business: vcpkg widens an installed package where it stands, without
+        # removing anything, so the pass below would be a remove and a rebuild
+        # to reach what the next install reaches anyway.
+        $extra = @($have | ?{ $_ -notin $want })
+
+        if (-not $extra) { continue }
 
         write-warning ("${name}:${triplet} is installed as $name[$($have -join ',')]" +
                        " rather than $name[$($want -join ',')]; rebuilding it")

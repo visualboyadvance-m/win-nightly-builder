@@ -2028,6 +2028,86 @@ describe 'report_free_space' {
 }
 
 
+# ── planned_features ────────────────────────────────────────────────
+#
+# What a port list names and what vcpkg installs for it are different sets,
+# and this is the one that answers "has something widened this package".
+# Plans are fed in here for the reason they are fed into get_host_ports: what
+# is under test is the reading of one.
+
+describe 'planned_features' {
+
+    function script:feature_plan([string[]]$plan, [int]$code = 0) {
+        {
+            param($t)
+
+            $global:LASTEXITCODE = $code
+            $plan
+        }.GetNewClosure()
+    }
+
+    it 'reads the feature set the plan worked out' {
+        # qtbase[async-io] asks for qtbase[future], and on android the port
+        # asks for qtbase[concurrent,thread] of itself. None of that is in the
+        # list the build hands vcpkg, and all of it ends up installed.
+        $plan = @('  * qtbase[async-io,concurrent,core,future,thread]:arm64-android@6.11.3#1')
+
+        (planned_features 'arm64-android' 'x64-windows' (feature_plan $plan))['qtbase'] |
+            should -be @('async-io', 'concurrent', 'core', 'future', 'thread')
+    }
+
+    it 'gives a port the plan names without features its core alone' {
+        $plan = @('    zlib:arm64-android@1.3.2')
+
+        (planned_features 'arm64-android' 'x64-windows' (feature_plan $plan))['zlib'] |
+            should -be @('core')
+    }
+
+    it 'answers for the triplet asked about and no other' {
+        # A plan covers the host triplet as well, and a host package is not
+        # what an installed set for this triplet is measured against.
+        $plan = @('  * icu[core,tools]:x64-windows@78.3#2',
+                  '  * zlib:arm64-android@1.3.2')
+        $got  = planned_features 'arm64-android' 'x64-windows' (feature_plan $plan)
+
+        @($got.keys) | should -be @('zlib')
+    }
+
+    it 'reads an overlay port, which carries its directory after the version' {
+        $plan = @('  * qtbase[core,gui]:arm64-android@6.11.3 -- /home/u/vcpkg-overlay/qtbase')
+
+        (planned_features 'arm64-android' 'x64-windows' (feature_plan $plan))['qtbase'] |
+            should -be @('core', 'gui')
+    }
+
+    it 'keeps platform-default-features, which says the defaults are still on' {
+        # The set installed for such a port is not the set the plan lists, so
+        # the caller has to be able to tell and leave it alone.
+        $plan = @('  * sdl3[core,platform-default-features,vulkan]:arm64-android@3.2.4')
+
+        (planned_features 'arm64-android' 'x64-windows' (feature_plan $plan))['sdl3'] |
+            should -contain 'platform-default-features'
+    }
+
+    it 'gives nothing back when vcpkg could not plan the triplet' {
+        # Not an empty answer to be acted on: enforce_core_features reads this
+        # as "no grounds to remove anything" rather than "narrow everything".
+        $got = planned_features 'riscv64-android' 'x64-windows' `
+                   (feature_plan @('error: no such triplet') 1) 3>$null
+
+        $got.count | should -be 0
+    }
+
+    it 'says which triplet it could not plan' {
+        $warnings = @(planned_features 'riscv64-android' 'x64-windows' `
+                          (feature_plan @('error: no such triplet') 1) 3>&1 |
+                              ?{ $_ -is [management.automation.warningrecord] })
+
+        "$warnings" | should -belike '*riscv64-android*x64-windows*no such triplet*'
+    }
+}
+
+
 # enforce_core_features lives in vcpkg-daily.ps1 rather than the module, and
 # that script does a run's worth of work when it is dot-sourced, so the
 # function is lifted out of it by its own parser and the vcpkg commands it
@@ -2058,6 +2138,11 @@ describe 'enforce_core_features' {
               'sdl3[vulkan,libusb]', 'wxwidgets[core]')
         }
         function get_host_dep_ports([string]$t) { @('glslang[tools]') }
+        # The feature sets vcpkg plans for the triplet, which is what an
+        # installed one is measured against. The default is the stub list
+        # above taken at its word -- ports whose features pull in nothing
+        # else -- so a test names this only where that is the point.
+        function planned_features([string]$t, [string]$ht) { $script:planned }
         # The repair reads the tree three times -- before the remove, after it
         # to see what went, and after the install to see what came back -- so
         # the stub answers in that order. A test that gives one listing is
@@ -2086,18 +2171,39 @@ describe 'enforce_core_features' {
         }
 
         function enforce([string[]]$listing, [string[]]$wanted = @('curl','openssl','expat'),
-                         [int]$rc = 0, [string[]]$after, [string[]]$final) {
+                         [int]$rc = 0, [string[]]$after, [string[]]$final,
+                         [hashtable]$planned) {
             $script:listing       = $listing
             $script:listing_after = $(if ($PSBoundParameters.ContainsKey('after')) { $after } else { $listing })
             $script:listing_final = $(if ($PSBoundParameters.ContainsKey('final')) { $final } else { $script:listing_after })
             $script:list_call     = 0
             $script:calls         = @()
             $script:rc            = $rc
+            $script:planned       = $(if ($PSBoundParameters.ContainsKey('planned')) { $planned }
+                                      else { @{ 'curl' = @('core','openssl'); 'wxwidgets' = @('core') } })
             $script:bad      = [System.Collections.Generic.List[string]]::new()
             $script:repaired = [System.Collections.Generic.List[string]]::new()
 
             $script:emitted = @(enforce_core_features 'x86-mingw-static' 'x64-windows' `
                                     $wanted $script:bad $script:repaired 3>$null)
+        }
+
+        # The warnings alone, for a test about what the pass said rather than
+        # what it did.
+        function enforce_warnings([string[]]$listing, [hashtable]$planned) {
+            $script:listing       = $listing
+            $script:listing_after = $listing
+            $script:listing_final = $listing
+            $script:list_call     = 0
+            $script:calls         = @()
+            $script:rc            = 0
+            $script:planned       = $planned
+            $script:bad      = [System.Collections.Generic.List[string]]::new()
+            $script:repaired = [System.Collections.Generic.List[string]]::new()
+
+            @(enforce_core_features 'x86-mingw-static' 'x64-windows' `
+                  @('curl','openssl','expat') $script:bad $script:repaired 3>&1 |
+                      ?{ $_ -is [management.automation.warningrecord] } | %{ "$_" })
         }
 
         # The remove and install, as "<verb>:<last argument>".
@@ -2161,6 +2267,65 @@ describe 'enforce_core_features' {
         enforce (listing @('openssl'))
 
         commands | should -benullorempty
+    }
+
+    it 'leaves a feature the port asked for of itself' {
+        # qtbase[async-io] asks for qtbase[future], and the android port asks
+        # for qtbase[concurrent,thread]; the list names none of them, vcpkg
+        # installs all of them, and held to the list qtbase came out widened
+        # on every triplet of every run -- removed, rebuilt, and found the
+        # same way by the run after. Measured against the plan there is
+        # nothing here to repair.
+        enforce (listing @('openssl','ssl')) -planned @{ 'curl' = @('core','openssl','ssl') }
+
+        commands | should -benullorempty
+    }
+
+    it 'narrows to the planned set rather than to the spec' {
+        # ssl is planned and sspi is not, so this is still a widening -- and
+        # the install asks for the spec, which vcpkg expands to the plan again.
+        enforce (listing @('openssl','ssl','sspi')) -planned @{ 'curl' = @('core','openssl','ssl') }
+
+        commands | should -be @('remove:curl', 'install:curl[core,openssl]')
+    }
+
+    it 'leaves a port the plan asks more of than the tree has' {
+        # Nothing to remove to get there: vcpkg adds a feature to an installed
+        # package where it stands, so the run's own install covers this.
+        enforce (listing @()) -planned @{ 'curl' = @('core','openssl') }
+
+        commands | should -benullorempty
+    }
+
+    it 'leaves a port whose defaults the plan kept' {
+        # platform-default-features means the installed set is the defaults
+        # and these, which cannot be told apart from a set vcpkg widened.
+        enforce (listing @('openssl','ssl','sspi')) `
+            -planned @{ 'curl' = @('core','openssl','platform-default-features') }
+
+        commands | should -benullorempty
+    }
+
+    it 'leaves a port the plan never names' {
+        enforce (listing @('openssl','ssl','sspi')) -planned @{ 'wxwidgets' = @('core') }
+
+        commands | should -benullorempty
+    }
+
+    it 'touches nothing at all when there is no plan' {
+        # A removal crosses triplets and takes every dependent with it. Doing
+        # that on a feature set nothing confirmed is worse than leaving a
+        # widened package up for a day.
+        enforce (listing @('openssl','ssl','sspi')) -planned @{}
+
+        commands             | should -benullorempty
+        $script:bad          | should -benullorempty
+        @($script:repaired)  | should -benullorempty
+    }
+
+    it 'says it had no plan to go on' {
+        enforce_warnings (listing @('openssl','ssl','sspi')) @{} |
+            should -belike '*no install plan for x86-mingw-static*'
     }
 
     it 'leaves a port with no feature lines at all' {
