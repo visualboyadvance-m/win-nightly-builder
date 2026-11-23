@@ -8,7 +8,7 @@ $trigger = new-scheduledtasktrigger -once:$false -at 00:00 -repetitioninterval (
 
 if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
 
-$action  = task_action -script update-repos.ps1 -log update-repos.log
+$action  = get-taskaction -script update-repos.ps1 -log update-repos.log
 
 $principal = new-scheduledtaskprincipal `
     -userid $env:USERNAME `

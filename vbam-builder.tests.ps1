@@ -2,7 +2,7 @@
 
 <#
 .SYNOPSIS
-    Pester tests for the vsenv function in vbam-builder.psm1.
+    Pester tests for the set-vsenv function in vbam-builder.psm1.
 
 .DESCRIPTION
     Run with:
@@ -10,15 +10,16 @@
         pwsh -noprofile -command 'invoke-pester ./vbam-builder.tests.ps1 -output detailed'
 
     vcvarsall.bat is mocked, so these tests do not need a working Visual
-    Studio installation, but vsenv itself is only defined when one is
+    Studio installation, but set-vsenv itself is only defined when one is
     found, so everything is skipped when it is not.
 #>
 
 # ── the module has to be loaded at discovery time for -skip ─────────
-$script:vbam = import-module "$PSScriptRoot/vbam-builder.psm1" -force `
-    -disablenamechecking -passthru
+# -disablenamechecking is not among these: every name the module exports is
+# verb-noun with an approved verb now, so there is nothing to warn about.
+$script:vbam = import-module "$PSScriptRoot/vbam-builder.psm1" -force -passthru
 
-$script:has_vsenv = [bool](& $script:vbam { get-command vsenv -ea ignore })
+$script:has_vsenv = [bool](& $script:vbam { get-command set-vsenv -ea ignore })
 
 beforeall {
     # ── snapshot environment so tests cannot pollute each other ──────
@@ -32,7 +33,7 @@ beforeall {
 
     # ── mock vcvarsall.bat ──────────────────────────────────────────
     # Calls a generated response.bat that sets env vars and echoes
-    # banner lines, so the subsequent `&& set` (from vsenv) outputs
+    # banner lines, so the subsequent `&& set` (from set-vsenv) outputs
     # the correct merged environment.
     $script:mock_vcvarsall = join-path $script:temp_dir 'vcvarsall.bat'
     $script:mock_response  = join-path $script:temp_dir 'vcvarsall_response.bat'
@@ -112,7 +113,7 @@ if exist "$($script:mock_response)" call "$($script:mock_response)"
         )
 
         # Use %Path% so cmd.exe expands the actual inherited PATH at
-        # runtime — this respects any stripping vsenv does before launch.
+        # runtime — this respects any stripping set-vsenv does before launch.
         $vs_path_joined = $vs_path_entries -join ';'
 
         @(
@@ -131,13 +132,13 @@ if exist "$($script:mock_response)" call "$($script:mock_response)"
     }
 
     # ── module internals ────────────────────────────────────────────
-    # vsenv and the env helpers are private to the module, so they are
+    # set-vsenv and the env helpers are private to the module, so they are
     # called in its session state.
     $script:vbam = get-module vbam-builder
 
-    function script:vsenv     { & $script:vbam { vsenv @args }     @args }
-    function script:save_env  { & $script:vbam { save_env }  }
-    function script:restore_env { & $script:vbam { restore_env } }
+    function script:set-vsenv     { & $script:vbam { set-vsenv @args }     @args }
+    function script:save-env  { & $script:vbam { save-env }  }
+    function script:restore-env { & $script:vbam { restore-env } }
 
     function script:get_vsenv_state {
         & $script:vbam { $script:vsenv_state }
@@ -148,7 +149,7 @@ if exist "$($script:mock_response)" call "$($script:mock_response)"
     }
 
     function script:reset_vsenv {
-        try { vsenv -unload } catch {}
+        try { set-vsenv -unload } catch {}
         & $script:vbam {
             $script:vsenv_state = $null
             $script:vsenv_vcpkg_in_path = $null
@@ -161,8 +162,8 @@ if exist "$($script:mock_response)" call "$($script:mock_response)"
         $response = new_vcvarsall_response -arch $arch
         if ($extra_lines) { $response = $response + $extra_lines }
         set_mock_output -lines $response
-        if ($toolkit) { vsenv $arch $toolkit }
-        else          { vsenv $arch }
+        if ($toolkit) { set-vsenv $arch $toolkit }
+        else          { set-vsenv $arch }
     }
 
     # ── inject the mock vcvarsall into the module ───────────────────
@@ -185,9 +186,9 @@ afterall {
 }
 
 # ════════════════════════════════════════════════════════════════════════
-#  vsenv
+#  set-vsenv
 # ════════════════════════════════════════════════════════════════════════
-describe 'vsenv' -skip:(-not $script:has_vsenv) {
+describe 'set-vsenv' -skip:(-not $script:has_vsenv) {
 
     beforeall {
         $script:vsenv_env_snap = @{}
@@ -261,7 +262,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
 
         it 'uses default arch when none specified' {
             set_mock_output -lines (new_vcvarsall_response -arch x64)
-            vsenv
+            set-vsenv
             get_mock_args | should -not -benullorempty
         }
     }
@@ -273,48 +274,48 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             $baseline = $env:Path
             invoke_vsenv -arch x64
             $env:Path | should -not -be $baseline
-            vsenv -unload
+            set-vsenv -unload
             $env:Path | should -not -match '\\Microsoft Visual Studio\\'
         }
 
         it 'restores INCLUDE to pre-vsenv value' {
             $before = $env:INCLUDE
             invoke_vsenv -arch x64
-            vsenv -unload
+            set-vsenv -unload
             $env:INCLUDE | should -be $before
         }
 
         it 'restores LIB to pre-vsenv value' {
             $before = $env:LIB
             invoke_vsenv -arch x64
-            vsenv -unload
+            set-vsenv -unload
             $env:LIB | should -be $before
         }
 
-        it 'removes env vars that did not exist before vsenv' {
+        it 'removes env vars that did not exist before set-vsenv' {
             ri env:VSINSTALLDIR -ea ignore
             invoke_vsenv -arch x64
             $env:VSINSTALLDIR | should -not -benullorempty
-            vsenv -unload
+            set-vsenv -unload
             $env:VSINSTALLDIR | should -benullorempty
         }
 
         it 'clears vsenv_state to null' {
             invoke_vsenv -arch x64
             get_vsenv_state | should -not -benullorempty
-            vsenv -unload
+            set-vsenv -unload
             get_vsenv_state | should -benullorempty
         }
 
         it 'is idempotent' {
             invoke_vsenv -arch x64
-            vsenv -unload
-            { vsenv -unload } | should -not -throw
+            set-vsenv -unload
+            { set-vsenv -unload } | should -not -throw
         }
     }
 
     # ── Session PATH Additions ──────────────────────────────────────
-    # vsenv subtracts the entries vcvarsall added rather than restoring
+    # set-vsenv subtracts the entries vcvarsall added rather than restoring
     # the PATH baseline it captured when it loaded, so entries added to
     # PATH in between are kept.
     describe 'Session PATH Additions' {
@@ -348,7 +349,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             invoke_vsenv -arch x64
             $env:Path = $new_dir + ';' + $env:Path
 
-            vsenv -unload
+            set-vsenv -unload
 
             ($env:Path -split ';') | should -contain $new_dir
             $env:Path | should -not -match '\\Microsoft Visual Studio\\'
@@ -382,7 +383,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             $env:Path = 'C:\Program Files\Microsoft Visual Studio\18\Community\Inherited;' +
                 $env:Path
 
-            vsenv -unload
+            set-vsenv -unload
 
             $env:Path | should -not -match '\\Microsoft Visual Studio\\'
         }
@@ -411,7 +412,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             invoke_vsenv -arch x64
             $first_vs = ($env:Path -split ';') | ? { $_ -match 'Microsoft Visual Studio' }
 
-            vsenv -unload
+            set-vsenv -unload
             invoke_vsenv -arch x64
             $reload_vs = ($env:Path -split ';') | ? { $_ -match 'Microsoft Visual Studio' }
 
@@ -422,7 +423,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             invoke_vsenv -arch x64
             $first_count = ($env:Path -split ';').count
 
-            vsenv -unload
+            set-vsenv -unload
             invoke_vsenv -arch x64
             ($env:Path -split ';').count | should -be $first_count
         }
@@ -486,7 +487,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             $env:VCPKG_ROOT = $script:mock_vcpkg_root
         }
 
-        it 'preserves VCPKG_ROOT value across vsenv load' {
+        it 'preserves VCPKG_ROOT value across set-vsenv load' {
             $before = $env:VCPKG_ROOT
             invoke_vsenv -arch x64
             $env:VCPKG_ROOT | should -be $before
@@ -500,7 +501,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
 
         it 'keeps VCPKG_ROOT in PATH after unload' {
             invoke_vsenv -arch x64
-            vsenv -unload
+            set-vsenv -unload
             $entries = $env:Path -split ';' | %{ $_.trimend('/\') }
             $entries | should -contain $script:mock_vcpkg_root.trimend('/\')
         }
@@ -515,7 +516,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
 
             it 'strips old VCPKG_ROOT and adds new one' {
                 invoke_vsenv -arch x64
-                vsenv -unload
+                set-vsenv -unload
 
                 $new_root = join-path $script:temp_dir 'vcpkg-v143'
                 ni -itemtype directory $new_root -force | out-null
@@ -532,7 +533,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
                 invoke_vsenv -arch x64
                 get_vsenv_vcpkg_in_path | should -be $script:mock_vcpkg_root.trimend('/\')
 
-                vsenv -unload
+                set-vsenv -unload
                 $new_root = join-path $script:temp_dir 'vcpkg-new'
                 ni -itemtype directory $new_root -force | out-null
                 $env:VCPKG_ROOT = $new_root
@@ -610,7 +611,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
                 else { $_ }
             }
             set_mock_output -lines $response
-            vsenv x64
+            set-vsenv x64
 
             ($env:Path -split ';') | ? { $_ -match '\\\\' } | should -benullorempty
         }
@@ -740,7 +741,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
         }
 
         it 'keeps a variable set between two loads' {
-            # What setup_build_env does: point the overlay triplets at the
+            # What enter-buildenv does: point the overlay triplets at the
             # toolkit's directory, then load that toolkit's environment.
             $env:VCPKG_OVERLAY_TRIPLETS = 'C:\overlay\triplets-default'
             invoke_vsenv -arch x64
@@ -756,7 +757,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             invoke_vsenv -arch x64
             $env:VSINSTALLDIR | should -not -be 'C:\before\'
 
-            vsenv -unload
+            set-vsenv -unload
             $env:VSINSTALLDIR | should -be 'C:\before\'
         }
     }
@@ -781,7 +782,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             $response = new_vcvarsall_response -arch x64
             $response += 'VCPKG_ROOT=C:\Different\vcpkg'
             set_mock_output -lines $response
-            vsenv x64
+            set-vsenv x64
 
             $env:VCPKG_ROOT | should -be $original
         }
@@ -791,7 +792,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
     describe 'Error Handling' {
         it 'throws when vcvarsall exits nonzero' {
             set_mock_output -lines @() -exit_code 1
-            { vsenv x64 } | should -throw '*vcvarsall*'
+            { set-vsenv x64 } | should -throw '*vcvarsall*'
         }
     }
 
@@ -801,15 +802,15 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
         it 'emits the vcvarsall command line via write-verbose' {
             set_mock_output -lines (new_vcvarsall_response -arch x64)
             $verbose = & $script:vbam {
-                $VerbosePreference = 'Continue'; vsenv x64
+                $VerbosePreference = 'Continue'; set-vsenv x64
             } 4>&1
-            $verbose | ? { $_ -match '^vsenv:' } | should -not -benullorempty
+            $verbose | ? { $_ -match '^set-vsenv:' } | should -not -benullorempty
         }
 
         it 'emits vcvarsall banner lines as verbose' {
             set_mock_output -lines (new_vcvarsall_response -arch x64)
             $verbose = & $script:vbam {
-                $VerbosePreference = 'Continue'; vsenv x64
+                $VerbosePreference = 'Continue'; set-vsenv x64
             } 4>&1
             $verbose | ? { $_ -match 'vcvarsall:' } | should -not -benullorempty
         }
@@ -845,7 +846,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             $response += 'VCToolsVersion=14.42.34433'
             set_mock_output -lines $response
 
-            vsenv x64 v143
+            set-vsenv x64 v143
 
             get_mock_args | should -match '14\.42\.34433'
         }
@@ -855,7 +856,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             $response += 'VCToolsVersion=14.50.35717'
             set_mock_output -lines $response
 
-            vsenv x64 v145
+            set-vsenv x64 v145
 
             get_mock_args | should -match '14\.50\.35717'
         }
@@ -865,7 +866,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             $response += 'VCToolsVersion=14.30.30705'
             set_mock_output -lines $response
 
-            vsenv x64 '14.30.30705'
+            set-vsenv x64 '14.30.30705'
 
             get_mock_args | should -match '14\.30\.30705'
         }
@@ -881,7 +882,7 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
             # clear VCToolsVersion so the warning triggers
             ri env:VCToolsVersion -ea ignore
 
-            $output = vsenv x64 v143 3>&1
+            $output = set-vsenv x64 v143 3>&1
             $warnings = @($output | ?{ $_ -is [System.Management.Automation.WarningRecord] })
 
             $warnings | should -not -benullorempty
@@ -889,21 +890,21 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
     }
 
     # ── Build Env Lifecycle ─────────────────────────────────────────
-    # setup_build_env calls restore_env, which replaces the environment
+    # enter-buildenv calls restore-env, which replaces the environment
     # wholesale while a vsenv_state from the previous build is still set.
     describe 'Build Env Lifecycle' {
 
         it 'does not accumulate entries across builds' {
             $marker = join-path $script:temp_dir 'pristine-marker'
             $env:Path = $marker + ';' + $env:Path
-            save_env
+            save-env
 
             invoke_vsenv -arch x64
             $first = ($env:Path -split ';').count
 
             foreach ($build in 1..3) {
-                restore_env
-                save_env
+                restore-env
+                save-env
                 invoke_vsenv -arch x64
 
                 ($env:Path -split ';').count | should -be $first
@@ -914,11 +915,11 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
         it 'keeps a restored environment clean of the previous build' {
             $marker = join-path $script:temp_dir 'pristine-marker-2'
             $env:Path = $marker + ';' + $env:Path
-            save_env
+            save-env
 
             invoke_vsenv -arch arm64
-            restore_env
-            save_env
+            restore-env
+            save-env
             invoke_vsenv -arch x64
 
             $entries = $env:Path -split ';'
@@ -928,55 +929,55 @@ describe 'vsenv' -skip:(-not $script:has_vsenv) {
     }
 }
 
-# ── get-triplets argument parsing ───────────────────────────────────
+# ── resolve-triplets argument parsing ───────────────────────────────────
 #
-# No Visual Studio needed: get-triplets only reads its arguments and
+# No Visual Studio needed: resolve-triplets only reads its arguments and
 # $TRIPLETS, so this runs everywhere the module loads.
 
-describe 'get-triplets' {
+describe 'resolve-triplets' {
 
     it 'builds the host triplet before anything else' {
         # vcpkg installs a host dependency with the port's default features,
         # and install never compares the features of a package already there.
         # Whichever pass reaches the host copy first decides what it holds, so
         # its own pass has to be the first one.
-        $out = @(get-triplets | %{ "$_" })
+        $out = @(resolve-triplets | %{ "$_" })
 
-        $out[0] | should -be (get_host_triplet)
+        $out[0] | should -be (get-hosttriplet)
     }
 
     it 'puts it first however the triplets were named' {
-        $out = @(get-triplets --triplets "x64-windows-static,$(get_host_triplet)" | %{ "$_" })
+        $out = @(resolve-triplets --triplets "x64-windows-static,$(get-hosttriplet)" | %{ "$_" })
 
-        $out[0] | should -be (get_host_triplet)
+        $out[0] | should -be (get-hosttriplet)
     }
 
     describe 'toolkit selection' {
 
         it 'builds only the named toolkit with --toolkit' {
             $a = @('--triplets', 'x64-windows-static,x86-windows', '--toolkit', 'v143')
-            $out = get-triplets @a
+            $out = resolve-triplets @a
             @($out).count | should -be 2
             @($out | %{ $_.Toolkits }) | should -be @('v143', 'v143')
         }
 
         it 'accepts the --toolkit=<value> spelling too' {
             $a = @('--triplets', 'x64-windows-static', '--toolkit=v143')
-            (get-triplets @a).Toolkits | should -be @('v143')
+            (resolve-triplets @a).Toolkits | should -be @('v143')
         }
 
         it 'keeps the default pair when no toolkit is asked for' {
             # An x86/x64 Windows triplet is built twice, once per toolset.
             $a = @('--triplets', 'x64-windows-static')
-            (get-triplets @a).Toolkits | should -be @('', 'v143')
+            (resolve-triplets @a).Toolkits | should -be @('', 'v143')
         }
 
         it 'gives other triplets a single default toolkit' {
             $a = @('--triplets', 'arm64-windows-static')
-            (get-triplets @a).Toolkits | should -be @('')
+            (resolve-triplets @a).Toolkits | should -be @('')
         }
 
-        # -skip off Windows: with no triplet named, get-triplets falls back to
+        # -skip off Windows: with no triplet named, resolve-triplets falls back to
         # the platform's default list, and only the Windows one has triplets a
         # toolkit applies to. On Linux and macOS these select nothing, so two
         # of them failed and the third passed for saying nothing.
@@ -984,45 +985,45 @@ describe 'get-triplets' {
             # Not "every default triplet, built with v143": the mingw and
             # arm64 ones have no v143 to select.
             $a = @('--toolkit', 'v143')
-            @(get-triplets @a | %{ "$_" }) | should -be @(
+            @(resolve-triplets @a | %{ "$_" }) | should -be @(
                 'x64-windows', 'x64-windows-static', 'x86-windows', 'x86-windows-static'
             )
         }
 
         it 'gives each of those only the named toolkit' -skip:(-not $IsWindows) {
             $a = @('--toolkit', 'v143')
-            $out = get-triplets @a
+            $out = resolve-triplets @a
             @($out | %{ $_.Toolkits }) | should -be @('v143', 'v143', 'v143', 'v143')
         }
 
         it 'leaves no mingw or arm64 triplet in a --toolkit-only selection' -skip:(-not $IsWindows) {
             $a = @('--toolkit', 'v143')
-            @(get-triplets @a | %{ "$_" }) | should -not -contain 'x86-mingw-static'
-            @(get-triplets @a | %{ "$_" }) | should -not -contain 'arm64-windows-static'
+            @(resolve-triplets @a | %{ "$_" }) | should -not -contain 'x86-mingw-static'
+            @(resolve-triplets @a | %{ "$_" }) | should -not -contain 'arm64-windows-static'
         }
 
         it 'allows an explicit --triplets that does support the toolkit' {
             $a = @('--triplets', 'x86-windows', '--toolkit', 'v143')
-            @(get-triplets @a | %{ "$_" }) | should -be @('x86-windows')
+            @(resolve-triplets @a | %{ "$_" }) | should -be @('x86-windows')
         }
 
         it 'rejects a named triplet the toolkit does not apply to' {
             # The default list is filtered instead, but naming one outright
             # is a mistake: there is no v143 to build arm64 with.
             $a = @('--triplets', 'arm64-windows-static', '--toolkit', 'v143')
-            { get-triplets @a } |
+            { resolve-triplets @a } |
                 should -throw -expectedmessage "*toolkit 'v143' does not apply to: arm64-windows-static*"
         }
 
         it 'names every unsupported triplet, not just the first' {
             $a = @('--triplets', 'arm64-windows-static,x86-mingw-static', '--toolkit', 'v143')
-            { get-triplets @a } |
+            { resolve-triplets @a } |
                 should -throw -expectedmessage '*arm64-windows-static, x86-mingw-static*'
         }
 
         it 'rejects a mixed list containing an unsupported triplet' {
             $a = @('--triplets', 'x64-windows,arm64-windows', '--toolkit', 'v143')
-            { get-triplets @a } | should -throw -expectedmessage '*does not apply to: arm64-windows*'
+            { resolve-triplets @a } | should -throw -expectedmessage '*does not apply to: arm64-windows*'
         }
     }
 
@@ -1030,26 +1031,26 @@ describe 'get-triplets' {
 
         it 'splits a comma separated --triplets' {
             $a = @('--triplets', 'x64-windows-static,x86-windows')
-            @(get-triplets @a | %{ "$_" }) | should -be @('x64-windows-static', 'x86-windows')
+            @(resolve-triplets @a | %{ "$_" }) | should -be @('x64-windows-static', 'x86-windows')
         }
 
         it 'takes --triplets as separate words' {
             $a = @('--triplets', 'x64-windows-static', 'x86-windows')
-            @(get-triplets @a | %{ "$_" }) | should -be @('x64-windows-static', 'x86-windows')
+            @(resolve-triplets @a | %{ "$_" }) | should -be @('x64-windows-static', 'x86-windows')
         }
 
         it 'falls back to $TRIPLETS when none are named' {
             # $TRIPLETS is deliberately not exported, so that callers have to
-            # come through get-triplets; read it from the module's own scope.
+            # come through resolve-triplets; read it from the module's own scope.
             #
             # The same set, in the same order, except that the host triplet is
             # moved to the front -- see 'builds the host triplet before
             # anything else' above for why it has to be.
             $expected = & $script:vbam { $TRIPLETS }
-            $host_t   = get_host_triplet
+            $host_t   = get-hosttriplet
             $expected = @($host_t) + @($expected | ?{ $_ -ne $host_t })
 
-            @(get-triplets | %{ "$_" }) | should -be @($expected)
+            @(resolve-triplets | %{ "$_" }) | should -be @($expected)
         }
 
         it 'falls back to it past a caller of its own holding a $triplets' {
@@ -1061,10 +1062,10 @@ describe 'get-triplets' {
             # has to happen inside the module: a caller outside it reads
             # nothing of the module's, so it cannot show this either way.
             $got = & $script:vbam {
-                & { param([string[]]$triplets) @(get-triplets | %{ "$_" }) } @(get_host_triplet)
+                & { param([string[]]$triplets) @(resolve-triplets | %{ "$_" }) } @(get-hosttriplet)
             }
 
-            @($got) | should -be @(get-triplets | %{ "$_" })
+            @($got) | should -be @(resolve-triplets | %{ "$_" })
         }
     }
 
@@ -1076,34 +1077,34 @@ describe 'get-triplets' {
 
         it 'rejects a misspelled option' {
             $a = @('--triplets', 'x64-windows-static', '--tolkit', 'v143')
-            { get-triplets @a } | should -throw -expectedmessage "*unknown argument '--tolkit'*"
+            { resolve-triplets @a } | should -throw -expectedmessage "*unknown argument '--tolkit'*"
         }
 
         it 'rejects a bare argument that is not attached to --triplets' {
-            { get-triplets 'x64-windows-static' } |
+            { resolve-triplets 'x64-windows-static' } |
                 should -throw -expectedmessage "*unknown argument 'x64-windows-static'*"
         }
 
         it 'names the expected options in the error' {
-            { get-triplets '--nonsense' } | should -throw -expectedmessage '*--triplets, --toolkit, --android or --force*'
+            { resolve-triplets '--nonsense' } | should -throw -expectedmessage '*--triplets, --toolkit, --android or --force*'
         }
 
         it 'accepts -f, which the callers read themselves and forward' {
             # vcpkg-daily.ps1 and build-nightly.ps1 both take -f/--force off
             # their own $args and then pass everything through to here.
             $a = @('-f', '--triplets', 'x64-windows-static')
-            { get-triplets @a } | should -not -throw
+            { resolve-triplets @a } | should -not -throw
         }
 
         it 'accepts --force as well' {
             $a = @('--force', '--triplets', 'x64-windows-static')
-            (get-triplets @a).Toolkits | should -be @('', 'v143')
+            (resolve-triplets @a).Toolkits | should -be @('', 'v143')
         }
 
         it 'does not treat --android as unknown' -skip:(-not $IsWindows) {
             # On Windows it is refused, but for being the wrong platform
             # rather than for being unrecognized.
-            { get-triplets '--android' } | should -throw -expectedmessage '*only built on Linux and macOS*'
+            { resolve-triplets '--android' } | should -throw -expectedmessage '*only built on Linux and macOS*'
         }
     }
 }
@@ -1111,7 +1112,7 @@ describe 'get-triplets' {
 # ── $HOST_TRIPLETS ──────────────────────────────────────────────────
 #
 # The hosts an Android cross build can be hosted on, which is also what
-# get_host_ports below is asked about, one at a time.
+# get-hostports below is asked about, one at a time.
 
 describe 'HOST_TRIPLETS' {
 
@@ -1135,15 +1136,15 @@ describe 'HOST_TRIPLETS' {
     }
 }
 
-# ── get_host_dep_ports ────────────────────────────────────
+# ── get-hostdepports ────────────────────────────────────
 #
 # The build tooling a triplet gets a copy of: the host triplets and nothing
 # else. vcpkg-daily.ps1 adds it to each triplet's own port list.
 
-describe 'get_dep_ports' {
+describe 'get-depports' {
 
     it 'gives an ordinary triplet the host list with libusb' {
-        @(get_dep_ports 'x64-windows-static' | ?{ $_ -like 'sdl3*' }) |
+        @(get-depports 'x64-windows-static' | ?{ $_ -like 'sdl3*' }) |
             should -be @('sdl3[vulkan,libusb]')
     }
 
@@ -1152,28 +1153,28 @@ describe 'get_dep_ports' {
         # all four Vista or later, and a static import of a function the system
         # has not got stops the binary loading rather than failing when called.
         # SDL3's libusb feature is the only thing that asks for it.
-        @(get_dep_ports 'x86-mingw-static' | ?{ $_ -like 'sdl3*' }) |
+        @(get-depports 'x86-mingw-static' | ?{ $_ -like 'sdl3*' }) |
             should -be @('sdl3[vulkan]')
     }
 
     it 'leaves the 64 bit mingw triplet alone' {
         # Only the 32 bit mingw build targets XP.
-        @(get_dep_ports 'x64-mingw-static' | ?{ $_ -like 'sdl3*' }) |
+        @(get-depports 'x64-mingw-static' | ?{ $_ -like 'sdl3*' }) |
             should -be @('sdl3[vulkan,libusb]')
     }
 
     it 'drops the Qt ports for the XP target' {
         # Qt 6 wants Windows 10 1809 or later, so a Qt package for the XP
         # triplet could not be used by anything that runs there.
-        $xp = port_names (get_dep_ports 'x86-mingw-static')
+        $xp = port_names (get-depports 'x86-mingw-static')
 
         foreach ($port in $XP_SKIP_PORTS) { $xp | should -not -contain $port }
     }
 
     it 'keeps the Qt ports everywhere else' {
         foreach ($port in $XP_SKIP_PORTS) {
-            port_names (get_dep_ports 'x64-windows-static') | should -contain $port
-            port_names (get_dep_ports 'x64-mingw-static')   | should -contain $port
+            port_names (get-depports 'x64-windows-static') | should -contain $port
+            port_names (get-depports 'x64-mingw-static')   | should -contain $port
         }
     }
 
@@ -1188,7 +1189,7 @@ describe 'get_dep_ports' {
         # TLS 1.0 and SHA-1 chains: OpenSSL brings its own TLS and its own
         # trust store and asks the system for neither.
         foreach ($t in @($TRIPLETS) + @($ANDROID_TRIPLETS)) {
-            @(get_dep_ports $t | ?{ $_ -like 'curl*' }) |
+            @(get-depports $t | ?{ $_ -like 'curl*' }) |
                 should -be @('curl[core,openssl]')
         }
     }
@@ -1201,9 +1202,9 @@ describe 'get_dep_ports' {
         # OpenSSL from source, so it needs a package of its own on every
         # triplet all the same.
         foreach ($t in @($TRIPLETS) + @($ANDROID_TRIPLETS)) {
-            port_names (get_dep_ports $t) | should -contain 'curl'
-            port_names (get_dep_ports $t) | should -contain 'openssl'
-            port_names (get_dep_ports $t) | should -contain 'expat'
+            port_names (get-depports $t) | should -contain 'curl'
+            port_names (get-depports $t) | should -contain 'openssl'
+            port_names (get-depports $t) | should -contain 'expat'
         }
     }
 
@@ -1211,8 +1212,8 @@ describe 'get_dep_ports' {
         # The rewrite must touch the sdl3 entry and the skipped ports and no
         # others: everything else the XP build links is what every other
         # Windows triplet links.
-        $xp   = @(get_dep_ports 'x86-mingw-static')
-        $full = @(get_dep_ports 'x64-windows-static')
+        $xp   = @(get-depports 'x86-mingw-static')
+        $full = @(get-depports 'x64-windows-static')
 
         $xp.Count | should -be ($full.Count - @($XP_SKIP_PORTS).Count)
 
@@ -1230,12 +1231,12 @@ describe 'get_dep_ports' {
         # "Cross compiling but no --with-cross-build option specified".
         foreach ($t in @('x86-mingw-static', 'x64-mingw-static',
                          'x64-windows-static', 'arm64-android')) {
-            @(get_dep_ports $t | ?{ $_ -like 'icu*' }) | should -beNullOrEmpty
+            @(get-depports $t | ?{ $_ -like 'icu*' }) | should -beNullOrEmpty
         }
     }
 
     it 'still gives an Android triplet the cross list' {
-        @(get_dep_ports 'arm64-android' | ?{ $_ -like 'sdl3*' }) |
+        @(get-depports 'arm64-android' | ?{ $_ -like 'sdl3*' }) |
             should -be @('sdl3[vulkan]')
     }
 
@@ -1247,7 +1248,7 @@ describe 'get_dep_ports' {
         # x86-mingw-static was in this list and is not any more: it is the XP
         # target, and Qt 6 starts at Windows 10 1809. See $XP_SKIP_PORTS.
         foreach ($t in @('x64-windows', 'x64-windows-static', 'x64-mingw-static')) {
-            $ports = port_names (get_dep_ports $t)
+            $ports = port_names (get-depports $t)
 
             $ports | should -contain 'qtbase'
             $ports | should -contain 'qttools'
@@ -1259,7 +1260,7 @@ describe 'get_dep_ports' {
         # itself, and wx links Qt on that target, so they have to come first:
         # vcpkg-daily.ps1 upgrades each port as it installs it, and a
         # dependency upgraded afterwards drags its dependents along behind it.
-        $ports = port_names (get_dep_ports 'arm64-android')
+        $ports = port_names (get-depports 'arm64-android')
 
         @($ports | ?{ $_ -eq 'qtbase'  }).Count | should -be 1
         @($ports | ?{ $_ -eq 'qttools' }).Count | should -be 1
@@ -1373,7 +1374,7 @@ describe 'Qt feature sets' {
         # and the host copy gets that set by being built before the passes
         # that would otherwise pull it in with the port's defaults.
         foreach ($t in $TRIPLETS) {
-            $qt = @(get_dep_ports $t | ?{ $_ -like 'qtbase*' })
+            $qt = @(get-depports $t | ?{ $_ -like 'qtbase*' })
 
             # x86-mingw-static is the XP target and gets no Qt at all.
             if (-not $qt) { continue }
@@ -1383,19 +1384,19 @@ describe 'Qt feature sets' {
     }
 
     it 'reaches the port lists as one spec per triplet' {
-        $desktop = @(get_dep_ports 'x64-mingw-static' | ?{ $_ -like 'qtbase*' })
-        $android = @(get_dep_ports 'arm64-android'    | ?{ $_ -like 'qtbase*' })
+        $desktop = @(get-depports 'x64-mingw-static' | ?{ $_ -like 'qtbase*' })
+        $android = @(get-depports 'arm64-android'    | ?{ $_ -like 'qtbase*' })
 
         $desktop | should -be @("qtbase[$($QT_FEATURES -join ',')]")
         $android | should -be @("qtbase[$($ANDROID_QT_FEATURES -join ',')]")
     }
 }
 
-describe 'get_host_dep_ports' {
+describe 'get-hostdepports' {
 
     it 'gives the host tooling to a triplet that can host a build' {
         foreach ($t in $HOST_TRIPLETS) {
-            @(get_host_dep_ports $t) | should -be @($HOST_DEP_PORTS)
+            @(get-hostdepports $t) | should -be @($HOST_DEP_PORTS)
         }
     }
 
@@ -1405,7 +1406,7 @@ describe 'get_host_dep_ports' {
         # triplet a cross target, and leave the builder without the tooling it
         # builds with.
         $got = & $script:vbam {
-            & { param([string[]]$host_triplets) @(get_host_dep_ports (get_host_triplet)) } @()
+            & { param([string[]]$host_triplets) @(get-hostdepports (get-hosttriplet)) } @()
         }
 
         @($got) | should -be @($HOST_DEP_PORTS)
@@ -1421,12 +1422,12 @@ describe 'get_host_dep_ports' {
         # A shader compiler built for the target is one the builder cannot
         # run. -static, mingw and android are targets, not machines.
         foreach ($t in @('x64-windows-static', 'x86-mingw-static', 'arm64-android')) {
-            @(get_host_dep_ports $t) | should -be @()
+            @(get-hostdepports $t) | should -be @()
         }
     }
 
     it 'gives nothing for no triplet at all' {
-        @(get_host_dep_ports) | should -be @()
+        @(get-hostdepports) | should -be @()
     }
 
     it 'is included in the names --packages accepts' {
@@ -1445,13 +1446,13 @@ describe 'get_host_dep_ports' {
     }
 }
 
-# ── get_host_ports plan parsing ─────────────────────────────────────
+# ── get-hostports plan parsing ─────────────────────────────────────
 #
 # The install plans are fed in rather than run: what is under test is the
 # reading of them, and a real plan needs a vcpkg, a ports tree and an
 # overlay.
 
-describe 'get_host_ports' {
+describe 'get-hostports' {
 
     # $LASTEXITCODE is how the real plan source reports failure, so a stand-in
     # has to set it too -- otherwise whatever ran last in the session decides
@@ -1475,7 +1476,7 @@ describe 'get_host_ports' {
             '    qttools:arm64-android@6.11.2#2'
             'Additional packages (*) will be modified to complete this operation.'
         )
-        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+        get-hostports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
             should -be @('zlib')
     }
 
@@ -1483,13 +1484,13 @@ describe 'get_host_ports' {
         # x64-windows-static is a different triplet, and its packages are not
         # the host's.
         $plan = @('  * openssl:x64-windows-static@3.6.4', '  * zlib:x64-windows@1.3.2#2')
-        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+        get-hostports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
             should -be @('zlib')
     }
 
     it 'keeps the features the plan asks for' {
         $plan = @('  * icu[core,tools]:x64-windows@78.3#2')
-        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+        get-hostports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
             should -be @('icu[tools]')
     }
 
@@ -1498,13 +1499,13 @@ describe 'get_host_ports' {
         # wants the port's defaults plus the extras, never fewer: another list
         # may already have asked for this port with features of its own.
         $plan = @('  * pcre2[core,jit,platform-default-features]:x64-windows@10.47#1')
-        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+        get-hostports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
             should -be @('pcre2[jit]')
     }
 
     it 'reads an overlay port, which the plan follows with its directory' {
         $plan = @('  * qtbase[core,dbus]:x64-windows@6.11.2#2 -- C:\src\vcpkg-overlay\qtbase')
-        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+        get-hostports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
             should -be @('qtbase[dbus]')
     }
 
@@ -1512,7 +1513,7 @@ describe 'get_host_ports' {
         # An installed host package is still wanted by name: that is what
         # keeps it upgraded and packaged with the rest.
         $plan = @('The following packages are already installed:', '    expat:x64-windows@2.8.3')
-        get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
+        get-hostports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $plan }) |
             should -be @('expat')
     }
 
@@ -1521,7 +1522,7 @@ describe 'get_host_ports' {
         # the Android host set the union over all five.
         $asked = [collections.generic.list[string]]::new()
         $src   = { param($t) $global:LASTEXITCODE = 0; $asked.add($t); @() }.GetNewClosure()
-        get_host_ports $ANDROID_TRIPLETS 'x64-windows' $src | out-null
+        get-hostports $ANDROID_TRIPLETS 'x64-windows' $src | out-null
         $asked | should -be $ANDROID_TRIPLETS
     }
 
@@ -1530,13 +1531,13 @@ describe 'get_host_ports' {
             'arm64-android' = @('  * qtbase[core,gui]:x64-windows@6.11.2')
             '*'             = @('  * qtbase[core,widgets]:x64-windows@6.11.2')
         }
-        get_host_ports $ANDROID_TRIPLETS 'x64-windows' (plan_source $plans) |
+        get-hostports $ANDROID_TRIPLETS 'x64-windows' (plan_source $plans) |
             should -be @('qtbase[gui,widgets]')
     }
 
     it 'lists a package once however many triplets named it' {
         $plan = @('  * zlib:x64-windows@1.3.2#2')
-        @(get_host_ports $ANDROID_TRIPLETS 'x64-windows' (plan_source @{ '*' = $plan })).count |
+        @(get-hostports $ANDROID_TRIPLETS 'x64-windows' (plan_source @{ '*' = $plan })).count |
             should -be 1
     }
 
@@ -1548,13 +1549,13 @@ describe 'get_host_ports' {
             '*'               = @('  * zlib:x64-windows@1.3.2#2')
         }
         $src = plan_source $plans @{ 'riscv64-android' = 1 }
-        get_host_ports $ANDROID_TRIPLETS 'x64-windows' $src 3>$null | should -be @('zlib')
+        get-hostports $ANDROID_TRIPLETS 'x64-windows' $src 3>$null | should -be @('zlib')
     }
 
     it 'says which triplet it could not plan' {
         $plans = @{ 'riscv64-android' = @('error: no such triplet'); '*' = @() }
         $src   = plan_source $plans @{ 'riscv64-android' = 1 }
-        $warnings = @(get_host_ports $ANDROID_TRIPLETS 'x64-windows' $src 3>&1 |
+        $warnings = @(get-hostports $ANDROID_TRIPLETS 'x64-windows' $src 3>&1 |
             ?{ $_ -is [management.automation.warningrecord] })
         "$warnings" | should -belike '*riscv64-android*x64-windows*no such triplet*'
     }
@@ -1565,8 +1566,8 @@ describe 'get_host_ports' {
         # test would be answering the next one's question.
         $calls = 0
         $src   = { param($t) $global:LASTEXITCODE = 0; $script:calls++; @('  * zlib:x64-windows@1.3.2') }
-        get_host_ports 'arm64-android' 'x64-windows' $src | out-null
-        get_host_ports 'arm64-android' 'x64-windows' $src | out-null
+        get-hostports 'arm64-android' 'x64-windows' $src | out-null
+        get-hostports 'arm64-android' 'x64-windows' $src | out-null
         $script:calls | should -be 2
     }
 
@@ -1591,19 +1592,19 @@ describe 'get_host_ports' {
         }
 
         it 'leaves the tooling in the full answer' {
-            get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $host_plan }) |
+            get-hostports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $host_plan }) |
                 should -be @('qtbase[gui]', 'dbus', 'vcpkg-cmake')
         }
 
         it 'narrows to what the plan puts on the host alone' {
-            get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $host_plan }) -Tools |
+            get-hostports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $host_plan }) -Tools |
                 should -be @('dbus', 'vcpkg-cmake')
         }
 
         it 'does not call a port a tool for being on the host under another name' {
             # qtbase is built for the host and for the target, so it is a
             # library the cross build needs a host copy of, not tooling.
-            get_host_ports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $host_plan }) -Tools |
+            get-hostports 'arm64-android' 'x64-windows' (plan_source @{ '*' = $host_plan }) -Tools |
                 should -not -contain 'qtbase[gui]'
         }
 
@@ -1611,7 +1612,7 @@ describe 'get_host_ports' {
             # Which is a cross-compiled Windows target: its host side is the
             # build tools and nothing else.
             $native = @('  * pkgconf:arm64-windows@3.0.3', '  * vcpkg-make:arm64-windows@2026-07-09')
-            get_host_ports 'arm64-windows-static' 'arm64-windows' (plan_source @{ '*' = $native }) -Tools |
+            get-hostports 'arm64-windows-static' 'arm64-windows' (plan_source @{ '*' = $native }) -Tools |
                 should -be @('pkgconf', 'vcpkg-make')
         }
     }
@@ -1619,12 +1620,12 @@ describe 'get_host_ports' {
     it 'returns nothing when no plan mentions the host triplet' {
         # Which is how a triplet that needs nothing on the host -- a native
         # build -- comes out.
-        @(get_host_ports 'x64-windows' 'x64-windows' (plan_source @{ '*' = @('  * zlib:x64-windows-static@1.3.2') })) |
+        @(get-hostports 'x64-windows' 'x64-windows' (plan_source @{ '*' = @('  * zlib:x64-windows-static@1.3.2') })) |
             should -be @()
     }
 }
 
-describe 'installed_package_stamps' {
+describe 'get-packagestamps' {
 
     beforeeach {
         $script:tree = join-path $script:temp_dir "stamps-$([guid]::NewGuid())"
@@ -1649,7 +1650,7 @@ describe 'installed_package_stamps' {
         # downstream, which wants to know that it moved, not what it moved to.
         touch_list 'zlib_1.3.2_x64-windows.list'
 
-        @((installed_package_stamps $script:tree).keys) | should -be @('zlib:x64-windows')
+        @((get-packagestamps $script:tree).keys) | should -be @('zlib:x64-windows')
     }
 
     it 'reads a version carrying an underscore of its own' {
@@ -1657,7 +1658,7 @@ describe 'installed_package_stamps' {
         # package and the middle is whatever the version happens to be.
         touch_list 'foo_1_2_3_x86-mingw-static.list'
 
-        @((installed_package_stamps $script:tree).keys) | should -be @('foo:x86-mingw-static')
+        @((get-packagestamps $script:tree).keys) | should -be @('foo:x86-mingw-static')
     }
 
     it 'moves the stamp when a package is rebuilt at the same version' {
@@ -1665,10 +1666,10 @@ describe 'installed_package_stamps' {
         # bump, or a dependency whose ABI moved, rebuilds a port at the same
         # version and so under the same file name.
         touch_list 'zlib_1.3.2_x64-windows.list' ([datetime]'2026-09-19T21:00:00Z')
-        $before = (installed_package_stamps $script:tree)['zlib:x64-windows']
+        $before = (get-packagestamps $script:tree)['zlib:x64-windows']
 
         touch_list 'zlib_1.3.2_x64-windows.list' ([datetime]'2026-09-20T21:00:00Z')
-        $after = (installed_package_stamps $script:tree)['zlib:x64-windows']
+        $after = (get-packagestamps $script:tree)['zlib:x64-windows']
 
         $after | should -not -be $before
     }
@@ -1677,18 +1678,18 @@ describe 'installed_package_stamps' {
         touch_list 'zlib_1.3.2_x64-windows.list'
         set-content -literalpath (join-path $script:info 'zlib_1.3.2_x64-windows.list.aux') -value 'x'
 
-        @((installed_package_stamps $script:tree).keys) | should -be @('zlib:x64-windows')
+        @((get-packagestamps $script:tree).keys) | should -be @('zlib:x64-windows')
     }
 
     it 'returns nothing for a tree with no installed directory' {
-        @((installed_package_stamps (join-path $script:temp_dir 'no-such-tree')).keys) | should -be @()
+        @((get-packagestamps (join-path $script:temp_dir 'no-such-tree')).keys) | should -be @()
     }
 }
 
-describe 'parse_sftp_listing' {
+describe 'convertfrom-sftplisting' {
 
     it 'reads the name and time of each package' {
-        $l = parse_sftp_listing @(
+        $l = convertfrom-sftplisting @(
             '-rw-rw-r--    1 1001     1001     12345678 Sep 21 14:25 ffmpeg_9.0.2_x64-windows.zip'
         ) ([datetime]'2026-09-28T10:00:00')
 
@@ -1701,7 +1702,7 @@ describe 'parse_sftp_listing' {
         # one, the directory flag, is read. Synthetic listings with tidy
         # "-rw-rw-r--" modes and numeric link counts all parsed happily while
         # every real line was dropped.
-        $l = parse_sftp_listing @(
+        $l = convertfrom-sftplisting @(
             'Changing to: /nightly.visualboyadvance-m.org/vcpkg/x64-windows'
             'sftp> ls -l'
             '-rw-******    ? 1016     1016      2610458 Sep 21 23:34 brotli_1.2.0_x64-windows.zip'
@@ -1716,7 +1717,7 @@ describe 'parse_sftp_listing' {
     it 'skips the banner, directories and anything not a package' {
         # sftp greets on stderr and echoes the prompt, and a toolkit
         # subdirectory sits in the same listing as the packages.
-        $l = parse_sftp_listing @(
+        $l = convertfrom-sftplisting @(
             'Connected to nightly.visualboyadvance-m.org.'
             'sftp> ls -l'
             'drwxrwxr-x    2 1001     1001         4096 Sep 21 14:25 v143'
@@ -1728,7 +1729,7 @@ describe 'parse_sftp_listing' {
     }
 
     it 'takes the year from a listing old enough to carry one' {
-        $l = parse_sftp_listing @(
+        $l = convertfrom-sftplisting @(
             '-rw-rw-r--    1 1001     1001       345678 Dec 30  2025 zlib_1.3.2_x64-windows.zip'
         ) ([datetime]'2026-09-28T10:00:00')
 
@@ -1738,7 +1739,7 @@ describe 'parse_sftp_listing' {
     it 'puts a recent month that has not happened yet in the previous year' {
         # No year in the listing under six months old, so December read in
         # September is last December, not one three months away.
-        $l = parse_sftp_listing @(
+        $l = convertfrom-sftplisting @(
             '-rw-rw-r--    1 1001     1001       345678 Dec 30 11:00 zlib_1.3.2_x64-windows.zip'
         ) ([datetime]'2026-09-28T10:00:00')
 
@@ -1748,7 +1749,7 @@ describe 'parse_sftp_listing' {
     it 'leaves out an entry whose date it cannot read' {
         # A month name from some other locale, say. Left out here reads
         # downstream as "no idea when", which republishes -- the safe way.
-        $l = parse_sftp_listing @(
+        $l = convertfrom-sftplisting @(
             '-rw-rw-r--    1 1001     1001       345678 Mmm 30 11:00 zlib_1.3.2_x64-windows.zip'
         ) ([datetime]'2026-09-28T10:00:00')
 
@@ -1756,40 +1757,40 @@ describe 'parse_sftp_listing' {
     }
 }
 
-describe 'package_needs_publishing' {
+describe 'test-publishneeded' {
 
     it 'leaves a package the server has a later copy of' {
-        package_needs_publishing @{ 'ffmpeg' = [datetime]'2026-09-21T14:25:00' } 'ffmpeg' ([datetime]'2026-09-20T09:00:00') |
+        test-publishneeded @{ 'ffmpeg' = [datetime]'2026-09-21T14:25:00' } 'ffmpeg' ([datetime]'2026-09-20T09:00:00') |
             should -be $false
     }
 
     it 'publishes one built since the copy up there was put' {
-        package_needs_publishing @{ 'ffmpeg' = [datetime]'2026-09-21T14:25:00' } 'ffmpeg' ([datetime]'2026-09-28T09:00:00') |
+        test-publishneeded @{ 'ffmpeg' = [datetime]'2026-09-21T14:25:00' } 'ffmpeg' ([datetime]'2026-09-28T09:00:00') |
             should -be $true
     }
 
     it 'publishes one the server does not have at all' {
         # The self-healing case: an upload that failed, or a run that died
         # before it got there.
-        package_needs_publishing @{ 'ffmpeg' = [datetime]'2026-09-21T14:25:00' } 'lua' ([datetime]'2026-09-20T09:00:00') |
+        test-publishneeded @{ 'ffmpeg' = [datetime]'2026-09-21T14:25:00' } 'lua' ([datetime]'2026-09-20T09:00:00') |
             should -be $true
     }
 
     it 'publishes everything when the listing is empty' {
         # An empty, missing or unreadable directory all arrive as no listing.
-        package_needs_publishing @{} 'ffmpeg' ([datetime]'2026-09-20T09:00:00') |
+        test-publishneeded @{} 'ffmpeg' ([datetime]'2026-09-20T09:00:00') |
             should -be $true
     }
 
     it 'does not republish over the minute sftp rounds away' {
         # The listing carries no seconds, so a copy put in the same minute as
         # the build reads as older than it.
-        package_needs_publishing @{ 'lua' = [datetime]'2026-09-28T09:30:00' } 'lua' `
+        test-publishneeded @{ 'lua' = [datetime]'2026-09-28T09:30:00' } 'lua' `
             ([datetime]'2026-09-28T09:30:40') | should -be $false
     }
 }
 
-describe 'archive_build_logs' {
+describe 'save-buildlogs' {
 
     it 'survives the empty $ROOT the builder actually has' {
         # $ROOT is "" on win_builder, where the logs live at /logs, and the
@@ -1814,7 +1815,7 @@ describe 'archive_build_logs' {
         try {
             & $vbam { $script:ROOT = '' }
 
-            { archive_build_logs $port 'x64-windows' } | should -not -throw
+            { save-buildlogs $port 'x64-windows' } | should -not -throw
         }
         finally {
             & $vbam { $script:ROOT = $args[0] } $saved
@@ -1828,38 +1829,38 @@ describe 'archive_build_logs' {
         $saved_vcpkg = $env:VCPKG_ROOT
         $env:VCPKG_ROOT = $script:temp_dir
 
-        try   { { archive_build_logs 'nosuchport' 'x64-windows' } | should -not -throw }
+        try   { { save-buildlogs 'nosuchport' 'x64-windows' } | should -not -throw }
         finally { $env:VCPKG_ROOT = $saved_vcpkg }
     }
 }
 
-describe 'is_whole_run' {
+describe 'test-wholerun' {
 
     it 'calls a default run whole' {
-        is_whole_run @($TRIPLETS) | should -be $true
+        test-wholerun @($TRIPLETS) | should -be $true
     }
 
     it 'does not call a run narrowed to one triplet whole' {
         # `--triplets x86-mingw-static --packages sdl3` refreshed a stale host
         # tool, which removed 39 packages across eight triplets, and then
         # rebuilt one. A refresh only puts things back when the run builds them.
-        is_whole_run @('x86-mingw-static') | should -be $false
+        test-wholerun @('x86-mingw-static') | should -be $false
     }
 
     it 'does not call a run narrowed to one package whole' {
-        is_whole_run @($TRIPLETS) @('sdl3') | should -be $false
+        test-wholerun @($TRIPLETS) @('sdl3') | should -be $false
     }
 
     it 'does not call a run with --skip-packages whole' {
-        is_whole_run @($TRIPLETS) @() @('ffmpeg') | should -be $false
+        test-wholerun @($TRIPLETS) @() @('ffmpeg') | should -be $false
     }
 
     it 'ignores the order the triplets come in' {
-        is_whole_run @($TRIPLETS | sort-object) | should -be $true
+        test-wholerun @($TRIPLETS | sort-object) | should -be $true
     }
 
     it 'does not call a subset whole even when it is all but one' {
-        is_whole_run @($TRIPLETS | select-object -skip 1) | should -be $false
+        test-wholerun @($TRIPLETS | select-object -skip 1) | should -be $false
     }
 
     it 'is not fooled by a parameter that shadows the platform list' {
@@ -1877,23 +1878,23 @@ describe 'is_whole_run' {
         # tree, the module's own parameters being $run_triplets and
         # $for_triplets so that no function of its own can do it.
         $got = & $script:vbam {
-            & { param([string[]]$triplets) is_whole_run $triplets } @('x86-mingw-static')
+            & { param([string[]]$triplets) test-wholerun $triplets } @('x86-mingw-static')
         }
 
         $got | should -be $false
     }
 }
 
-describe 'vcpkg_tree_paths' {
+describe 'get-vcpkgtrees' {
 
     it 'names the default checkout first' {
         # Both scripts take these in the order they come back, so the order is
         # the whole reason two runs asking for the set cannot deadlock.
-        @(vcpkg_tree_paths)[0] | should -be (join-path $REPOS_ROOT vcpkg)
+        @(get-vcpkgtrees)[0] | should -be (join-path $REPOS_ROOT vcpkg)
     }
 
     it 'names one tree per toolkit beside it' {
-        $paths = @(vcpkg_tree_paths)
+        $paths = @(get-vcpkgtrees)
         $root  = join-path $REPOS_ROOT vcpkg
 
         $paths.count | should -be (1 + @($TOOLKITS | ?{ $_ }).count)
@@ -1906,22 +1907,22 @@ describe 'vcpkg_tree_paths' {
     it 'gives every tree a lock of its own' {
         # One lock standing in for two trees would be a lock that serialises
         # builds it has no business serialising, and worse, a tree left open.
-        $locks = @(vcpkg_tree_paths | %{ git_lock_path $_ 'inuse' })
+        $locks = @(get-vcpkgtrees | %{ get-gitlockpath $_ 'inuse' })
 
         @($locks | select-object -unique).count | should -be $locks.count
     }
 
-    it 'is the list get-triplets builds its toolkits from' -skip:(-not $IsWindows) {
+    it 'is the list resolve-triplets builds its toolkits from' -skip:(-not $IsWindows) {
         # The two read the same $TOOLKITS so they cannot drift: a toolkit that
         # gets a tree but no triplets, or triplets but no lock, is the bug this
         # is here to catch.
-        $tks = @((get-triplets --triplets x64-windows-static).Toolkits | ?{ $_ })
+        $tks = @((resolve-triplets --triplets x64-windows-static).Toolkits | ?{ $_ })
 
         $tks | should -be @($TOOLKITS | ?{ $_ })
     }
 }
 
-describe 'acquire_git_lock kinds' {
+describe 'lock-git kinds' {
 
     beforeeach {
         $script:lock_tree = join-path $script:temp_dir "locktree-$([guid]::NewGuid())"
@@ -1935,110 +1936,110 @@ describe 'acquire_git_lock kinds' {
     it 'refuses a second holder of the same kind' {
         # The file is opened with no sharing, so this holds within one process
         # as well as across two, which is what makes it testable here.
-        $first = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $first = lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse'
         $first | should -not -be $null
 
-        acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse' | should -be $null
+        lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse' | should -be $null
 
-        release_git_lock $first
+        unlock-git $first
     }
 
     it 'lets the two kinds be held at once' {
         # The point of having two. A run holds "inuse" for hours, and its own
-        # update_vcpkg takes "git" for each pull it makes inside that; one lock
+        # update-vcpkg takes "git" for each pull it makes inside that; one lock
         # for both would have the run waiting on itself.
-        $inuse = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
-        $git   = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'git'
+        $inuse = lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $git   = lock-git $script:lock_tree -timeout_seconds 0 -kind 'git'
 
         $inuse | should -not -be $null
         $git   | should -not -be $null
 
-        release_git_lock $git
-        release_git_lock $inuse
+        unlock-git $git
+        unlock-git $inuse
     }
 
     it 'gives the lock up again when released' {
-        $first = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
-        release_git_lock $first
+        $first = lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        unlock-git $first
 
-        $again = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $again = lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse'
         $again | should -not -be $null
 
-        release_git_lock $again
+        unlock-git $again
     }
 
     it 'returns at once rather than waiting when asked not to' {
         # update-repos is hourly and a nightly runs for hours: waiting would
         # stall the task behind it for the rest of the night.
-        $held = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $held = lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse'
 
         $sw = [diagnostics.stopwatch]::StartNew()
-        acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse' | out-null
+        lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse' | out-null
         $sw.Stop()
 
         $sw.Elapsed.TotalSeconds | should -belessthan 2
 
-        release_git_lock $held
+        unlock-git $held
     }
 
     it 'knows when this process is the holder' {
-        # update_vcpkg asks this before probing, so a run holding the in-use
+        # update-vcpkg asks this before probing, so a run holding the in-use
         # lock for the length of its build does not queue behind itself.
-        holds_git_lock $script:lock_tree 'inuse' | should -be $false
+        test-gitlock $script:lock_tree 'inuse' | should -be $false
 
-        $mine = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $mine = lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse'
 
-        holds_git_lock $script:lock_tree 'inuse' | should -be $true
+        test-gitlock $script:lock_tree 'inuse' | should -be $true
 
-        release_git_lock $mine
+        unlock-git $mine
 
-        holds_git_lock $script:lock_tree 'inuse' | should -be $false
+        test-gitlock $script:lock_tree 'inuse' | should -be $false
     }
 
     it 'answers separately for the two kinds' {
-        $git = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'git'
+        $git = lock-git $script:lock_tree -timeout_seconds 0 -kind 'git'
 
-        holds_git_lock $script:lock_tree 'git'   | should -be $true
-        holds_git_lock $script:lock_tree 'inuse' | should -be $false
+        test-gitlock $script:lock_tree 'git'   | should -be $true
+        test-gitlock $script:lock_tree 'inuse' | should -be $false
 
-        release_git_lock $git
+        unlock-git $git
     }
 
     it 'derives the same path that acquiring uses' {
         # Two spellings of one checkout are one lock, and the file the helper
         # names is the file acquiring creates -- if those drifted apart,
-        # holds_git_lock would answer about a lock nobody takes.
-        $a = git_lock_path $script:lock_tree 'inuse'
-        $b = git_lock_path ($script:lock_tree + '') 'inuse'
+        # test-gitlock would answer about a lock nobody takes.
+        $a = get-gitlockpath $script:lock_tree 'inuse'
+        $b = get-gitlockpath ($script:lock_tree + '') 'inuse'
 
         $a | should -be $b
 
-        $mine = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $mine = lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse'
 
         (test-path $a) | should -be $true
 
-        release_git_lock $mine
+        unlock-git $mine
     }
 
     it 'locks each checkout on its own' {
         $other = join-path $script:temp_dir "locktree-other-$([guid]::NewGuid())"
         ni -itemtype directory $other -force | out-null
 
-        $a = acquire_git_lock $script:lock_tree -timeout_seconds 0 -kind 'inuse'
-        $b = acquire_git_lock $other            -timeout_seconds 0 -kind 'inuse'
+        $a = lock-git $script:lock_tree -timeout_seconds 0 -kind 'inuse'
+        $b = lock-git $other            -timeout_seconds 0 -kind 'inuse'
 
         $b | should -not -be $null
 
-        release_git_lock $a
-        release_git_lock $b
+        unlock-git $a
+        unlock-git $b
         ri -r -fo $other -ea ignore
     }
 }
 
-describe 'free_space_gb' {
+describe 'get-freespace' {
 
     it 'answers with a positive number for a path that exists' {
-        $free = free_space_gb $REPOS_ROOT
+        $free = get-freespace $REPOS_ROOT
 
         $free | should -not -be $null
         $free | should -begreaterthan 0
@@ -2048,32 +2049,32 @@ describe 'free_space_gb' {
         # The callers log what this returns and carry on either way. A run must
         # not die reporting its disk, which is the one thing it is doing when
         # the disk is the problem.
-        free_space_gb 'Q:\no\such\volume' | should -be $null
+        get-freespace 'Q:\no\such\volume' | should -be $null
     }
 }
 
-describe 'report_free_space' {
+describe 'show-freespace' {
 
     it 'records the number and the volume it is for' {
-        $out = @(report_free_space $REPOS_ROOT 3>$null)
+        $out = @(show-freespace $REPOS_ROOT 3>$null)
 
         ($out -join "`n") | should -match 'INFO: [0-9.]+ GB free on '
     }
 
     it 'says nothing at all when there is no number to be had' -skip:(-not $IsWindows) {
-        @(report_free_space 'Q:\no\such\volume' 3>$null) | should -benullorempty
+        @(show-freespace 'Q:\no\such\volume' 3>$null) | should -benullorempty
     }
 }
 
 
-# ── planned_features ────────────────────────────────────────────────
+# ── get-plannedfeatures ────────────────────────────────────────────────
 #
 # What a port list names and what vcpkg installs for it are different sets,
 # and this is the one that answers "has something widened this package".
-# Plans are fed in here for the reason they are fed into get_host_ports: what
+# Plans are fed in here for the reason they are fed into get-hostports: what
 # is under test is the reading of one.
 
-describe 'planned_features' {
+describe 'get-plannedfeatures' {
 
     function script:feature_plan([string[]]$plan, [int]$code = 0) {
         {
@@ -2090,14 +2091,14 @@ describe 'planned_features' {
         # list the build hands vcpkg, and all of it ends up installed.
         $plan = @('  * qtbase[async-io,concurrent,core,future,thread]:arm64-android@6.11.3#1')
 
-        (planned_features 'arm64-android' 'x64-windows' (feature_plan $plan))['qtbase'] |
+        (get-plannedfeatures 'arm64-android' 'x64-windows' (feature_plan $plan))['qtbase'] |
             should -be @('async-io', 'concurrent', 'core', 'future', 'thread')
     }
 
     it 'gives a port the plan names without features its core alone' {
         $plan = @('    zlib:arm64-android@1.3.2')
 
-        (planned_features 'arm64-android' 'x64-windows' (feature_plan $plan))['zlib'] |
+        (get-plannedfeatures 'arm64-android' 'x64-windows' (feature_plan $plan))['zlib'] |
             should -be @('core')
     }
 
@@ -2106,7 +2107,7 @@ describe 'planned_features' {
         # what an installed set for this triplet is measured against.
         $plan = @('  * icu[core,tools]:x64-windows@78.3#2',
                   '  * zlib:arm64-android@1.3.2')
-        $got  = planned_features 'arm64-android' 'x64-windows' (feature_plan $plan)
+        $got  = get-plannedfeatures 'arm64-android' 'x64-windows' (feature_plan $plan)
 
         @($got.keys) | should -be @('zlib')
     }
@@ -2114,7 +2115,7 @@ describe 'planned_features' {
     it 'reads an overlay port, which carries its directory after the version' {
         $plan = @('  * qtbase[core,gui]:arm64-android@6.11.3 -- /home/u/vcpkg-overlay/qtbase')
 
-        (planned_features 'arm64-android' 'x64-windows' (feature_plan $plan))['qtbase'] |
+        (get-plannedfeatures 'arm64-android' 'x64-windows' (feature_plan $plan))['qtbase'] |
             should -be @('core', 'gui')
     }
 
@@ -2123,21 +2124,21 @@ describe 'planned_features' {
         # the caller has to be able to tell and leave it alone.
         $plan = @('  * sdl3[core,platform-default-features,vulkan]:arm64-android@3.2.4')
 
-        (planned_features 'arm64-android' 'x64-windows' (feature_plan $plan))['sdl3'] |
+        (get-plannedfeatures 'arm64-android' 'x64-windows' (feature_plan $plan))['sdl3'] |
             should -contain 'platform-default-features'
     }
 
     it 'gives nothing back when vcpkg could not plan the triplet' {
-        # Not an empty answer to be acted on: enforce_core_features reads this
+        # Not an empty answer to be acted on: repair-corefeatures reads this
         # as "no grounds to remove anything" rather than "narrow everything".
-        $got = planned_features 'riscv64-android' 'x64-windows' `
+        $got = get-plannedfeatures 'riscv64-android' 'x64-windows' `
                    (feature_plan @('error: no such triplet') 1) 3>$null
 
         $got.count | should -be 0
     }
 
     it 'says which triplet it could not plan' {
-        $warnings = @(planned_features 'riscv64-android' 'x64-windows' `
+        $warnings = @(get-plannedfeatures 'riscv64-android' 'x64-windows' `
                           (feature_plan @('error: no such triplet') 1) 3>&1 |
                               ?{ $_ -is [management.automation.warningrecord] })
 
@@ -2146,20 +2147,20 @@ describe 'planned_features' {
 }
 
 
-# enforce_core_features lives in vcpkg-daily.ps1 rather than the module, and
+# repair-corefeatures lives in vcpkg-daily.ps1 rather than the module, and
 # that script does a run's worth of work when it is dot-sourced, so the
 # function is lifted out of it by its own parser and the vcpkg commands it
 # drives are stubbed. What is being tested is the reading of a feature set and
 # the decision to rebuild, not vcpkg.
-describe 'enforce_core_features' {
+describe 'repair-corefeatures' {
 
     beforeall {
         $daily = join-path $PSScriptRoot 'vcpkg-daily.ps1'
         $ast   = [System.Management.Automation.Language.Parser]::ParseFile(
                      $daily, [ref]$null, [ref]$null)
 
-        # enforce_core_features calls installed_specs, so both come over.
-        foreach ($name in 'installed_specs', 'enforce_core_features') {
+        # repair-corefeatures calls get-installedspecs, so both come over.
+        foreach ($name in 'get-installedspecs', 'repair-corefeatures') {
             $fn = $ast.FindAll({
                       param($n)
                       $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -2171,16 +2172,16 @@ describe 'enforce_core_features' {
             . ([scriptblock]::Create($fn.Extent.Text))
         }
 
-        function get_dep_ports([string]$t) {
+        function get-depports([string]$t) {
             @('zlib', 'curl[core,openssl]', 'openssl', 'expat',
               'sdl3[vulkan,libusb]', 'wxwidgets[core]')
         }
-        function get_host_dep_ports([string]$t) { @('glslang[tools]') }
+        function get-hostdepports([string]$t) { @('glslang[tools]') }
         # The feature sets vcpkg plans for the triplet, which is what an
         # installed one is measured against. The default is the stub list
         # above taken at its word -- ports whose features pull in nothing
         # else -- so a test names this only where that is the point.
-        function planned_features([string]$t, [string]$ht) { $script:planned }
+        function get-plannedfeatures([string]$t, [string]$ht) { $script:planned }
         # The repair reads the tree three times -- before the remove, after it
         # to see what went, and after the install to see what came back -- so
         # the stub answers in that order. A test that gives one listing is
@@ -2194,7 +2195,7 @@ describe 'enforce_core_features' {
                 default { $script:listing_final }
             }
         }
-        function vcpkg_run {
+        function invoke-vcpkg {
             $script:calls += ,@($args)
             $global:LASTEXITCODE = $script:rc
             "vcpkg said something about $($args[-1])"
@@ -2222,7 +2223,7 @@ describe 'enforce_core_features' {
             $script:bad      = [System.Collections.Generic.List[string]]::new()
             $script:repaired = [System.Collections.Generic.List[string]]::new()
 
-            $script:emitted = @(enforce_core_features 'x86-mingw-static' 'x64-windows' `
+            $script:emitted = @(repair-corefeatures 'x86-mingw-static' 'x64-windows' `
                                     $wanted $script:bad $script:repaired 3>$null)
         }
 
@@ -2239,7 +2240,7 @@ describe 'enforce_core_features' {
             $script:bad      = [System.Collections.Generic.List[string]]::new()
             $script:repaired = [System.Collections.Generic.List[string]]::new()
 
-            @(enforce_core_features 'x86-mingw-static' 'x64-windows' `
+            @(repair-corefeatures 'x86-mingw-static' 'x64-windows' `
                   @('curl','openssl','expat') $script:bad $script:repaired 3>&1 |
                       ?{ $_ -is [management.automation.warningrecord] } | %{ "$_" })
         }
@@ -2447,7 +2448,7 @@ describe 'enforce_core_features' {
         # arm64-osx at all, and posixsh with none for x86-android -- and so no
         # wxwidgets there either, since wx needs Qt to configure.
         #
-        # The host triplet is installed first for the reason get-triplets
+        # The host triplet is installed first for the reason resolve-triplets
         # orders a run that way: a cross target installed first pulls its host
         # dependency in on its own, with the port's default features.
         enforce @('curl:x86-mingw-static   8.23.0   a library',

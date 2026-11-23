@@ -7,7 +7,7 @@ $stage_dir = join-path $env:TEMP vbam-nightly-build
 
 $force_build = $args | ?{ $_ -match '^--?f' }
 
-$build_triplets = get-triplets @args | ?{
+$build_triplets = resolve-triplets @args | ?{
     ($_ -in 'x64-windows-static','x86-mingw-static','arm64-windows-static') -or
     ($_ -in $ANDROID_TRIPLETS)
 }
@@ -19,7 +19,7 @@ $build_triplets = get-triplets @args | ?{
 # changed -- an Android nightly following a Windows one would find its APKs
 # perpetually stale and never rebuild them. Answered per triplet rather than
 # once for the run, so a set holding both kinds gets both checkouts.
-function repo_for_triplet($triplet) {
+function get-tripletrepo($triplet) {
     join-path $REPOS_ROOT $(
 	if ($triplet -in $ANDROID_TRIPLETS) { 'visualboyadvance-m-nightly-android' }
 	else                                { 'visualboyadvance-m-nightly' }
@@ -57,7 +57,7 @@ $build_failures = @()
 # checkout is fetched and asked once, however many triplets it carries.
 $plan = @()
 
-foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -unique)) {
+foreach ($repo_path in @($build_triplets | %{ get-tripletrepo $_ } | select -unique)) {
     $repo_name = split-path -leaf $repo_path
     $forced    = [bool]$force_build
 
@@ -72,11 +72,11 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
     }
 
     # The lock covers the fetch, the decision made from what it brought in, and
-    # the pull that acts on it. update_git_checkout is no use here: the pull is
+    # the pull that acts on it. update-checkout is no use here: the pull is
     # conditional -- a run that finds nothing worth building leaves HEAD where
     # it is so the next one sees the change again -- and another run pulling in
     # between would decide this one's question for it.
-    $repo_lock = acquire_git_lock $repo_path
+    $repo_lock = lock-git $repo_path
 
     pushd $repo_path
 
@@ -93,7 +93,7 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
 	$build_failures += "${repo_name}: git fetch exited $LASTEXITCODE"
 	write-warning "${repo_name}: git fetch exited $LASTEXITCODE, skipping it"
 	popd
-	release_git_lock $repo_lock
+	unlock-git $repo_lock
 	continue
     }
     git submodule update --init --recursive
@@ -130,7 +130,7 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
 	(-not $translations_only)) {
 	"INFO: No changes to build in ${repo_name}."
 	popd
-	release_git_lock $repo_lock
+	unlock-git $repo_lock
 	continue
     }
 
@@ -142,9 +142,9 @@ foreach ($repo_path in @($build_triplets | %{ repo_for_triplet $_ } | select -un
 
     popd
 
-    release_git_lock $repo_lock
+    unlock-git $repo_lock
 
-    $repo_triplets = @($build_triplets | ?{ (repo_for_triplet $_) -eq $repo_path })
+    $repo_triplets = @($build_triplets | ?{ (get-tripletrepo $_) -eq $repo_path })
 
     # translations.zip does not depend on the architecture, so one build of it
     # is all a checkout needs however many triplets asked for it.
@@ -180,12 +180,12 @@ if (-not $plan) {
 #
 # Every tree, not just the default: x64-windows-static builds under v143 and so
 # reads out of vcpkg-v143/installed, which locking the default checkout alone
-# left exposed to exactly the above. vcpkg_tree_paths fixes the order.
+# left exposed to exactly the above. get-vcpkgtrees fixes the order.
 #
 # Taken after the plan, so a night with nothing to build does not sit here
 # waiting for an upgrade whose packages it was never going to touch. Eight
 # hours because four was not enough -- the 2026-10-16 upgrade outlasted it and
-# this script went ahead unlocked at 03:01 -- and acquire_git_lock warns and
+# this script went ahead unlocked at 03:01 -- and lock-git warns and
 # returns null rather than throwing when it times out, which leaves a timeout
 # exactly where this script was before any of this: racing, but saying so.
 #
@@ -193,12 +193,12 @@ if (-not $plan) {
 # without waiting and goes ahead regardless, by the semantics that task was
 # given -- which would need a nightly still running at 21:00 the next evening
 # to matter.
-$vcpkg_tree_locks = @(vcpkg_tree_paths | %{
-    acquire_git_lock $_ -timeout_seconds 28800 -kind 'inuse'
+$vcpkg_tree_locks = @(get-vcpkgtrees | %{
+    lock-git $_ -timeout_seconds 28800 -kind 'inuse'
 })
 
 "INFO: Build started on $(date)."
-report_free_space $REPOS_ROOT
+show-freespace $REPOS_ROOT
 
 foreach ($item in $plan) {
     $triplet   = $item.triplet
@@ -210,10 +210,10 @@ foreach ($item in $plan) {
     pushd $build_dir
 
     if ($triplet -match 'x64-windows') {
-	setup_build_env $triplet v143
+	enter-buildenv $triplet v143
     }
     else {
-	setup_build_env $triplet
+	enter-buildenv $triplet
     }
 
     $translations_only_str = if ($item.translations_only) `
@@ -286,11 +286,11 @@ foreach ($item in $plan) {
     popd
 }
 
-teardown_build_env
+exit-buildenv
 
 # Nothing below this reads a vcpkg tree: what is left is staging the artifacts
 # the builds produced and sending them up.
-$vcpkg_tree_locks | %{ release_git_lock $_ }
+$vcpkg_tree_locks | %{ unlock-git $_ }
 
 ri -r -fo  $stage_dir -ea ignore
 ni -it dir $stage_dir | out-null
@@ -352,7 +352,7 @@ pushd $stage_dir
 # "Uploading ... to ...", "Changing mode on ..." -- is on stdout and still
 # lands in the log; what is left to judge the upload by is the exit status,
 # which the engine leaves in $LASTEXITCODE for the caller to read.
-function upload_file([string]$name) {
+function send-file([string]$name) {
     $erroractionpreference = 'continue'
 
     ("put {0}`nchmod 664 {0}" -f $name) | sftp sftpuser@posixsh.org:nightly.visualboyadvance-m.org/ 2>$null
@@ -361,7 +361,7 @@ function upload_file([string]$name) {
 $upload_failures = @()
 
 gci -n | %{
-    upload_file $_
+    send-file $_
 
     if ($LASTEXITCODE -ne 0) {
         $upload_failures += $_

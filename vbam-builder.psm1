@@ -276,7 +276,7 @@ $ANDROID_TRIPLETS = 'arm64-android','arm-neon-android','x64-android','x86-androi
 
 # The toolkits beside the default one. Each gets a vcpkg tree of its own next to
 # the default checkout -- v143 installs into vcpkg-v143 beside it -- so
-# this is also the list vcpkg_tree_paths builds the lock set from, and the two
+# this is also the list get-vcpkgtrees builds the lock set from, and the two
 # must not be able to disagree about what trees exist.
 $TOOLKITS       = @('v143')
 
@@ -321,7 +321,7 @@ set-alias -force vcpkg (join-path $env:VCPKG_ROOT $(if ($iswindows) { 'vcpkg.exe
 # be lowered without leaking -- a foreach-object block runs in the caller's
 # scope and would leave the setting behind. What is left to judge a run by is
 # the exit status, which the engine leaves in $LASTEXITCODE for the caller.
-function vcpkg_run {
+function invoke-vcpkg {
     $erroractionpreference = 'continue'
 
     vcpkg @args
@@ -329,7 +329,7 @@ function vcpkg_run {
 
 # Run git without letting a progress line abort the caller.
 #
-# The same shape as vcpkg_run above and the same reason. git reports what it
+# The same shape as invoke-vcpkg above and the same reason. git reports what it
 # does on stderr -- "From github.com:..." on a fetch that brought something in,
 # "To github.com:..." and the ref update on every successful push -- Windows
 # PowerShell turns a native command's redirected stderr into an error record,
@@ -355,7 +355,7 @@ function vcpkg_run {
 # function's own preference is what makes the difference here.
 #
 # $lastexitcode is what says whether git worked; the pipe does not disturb it.
-function git_run {
+function invoke-git {
     $erroractionpreference = 'continue'
 
     git @args 2>&1 | %{ "$_" }
@@ -369,7 +369,7 @@ if (-not $env:VCPKG_OVERLAY_PORTS) {
 }
 
 # The overlay's triplets directory holds riscv64-android, which vcpkg itself has
-# no triplet for.  On Windows setup_build_env points VCPKG_OVERLAY_TRIPLETS at a
+# no triplet for.  On Windows enter-buildenv points VCPKG_OVERLAY_TRIPLETS at a
 # per-toolkit directory instead, so leave it alone there.
 if ((-not $iswindows) -and (-not $env:VCPKG_OVERLAY_TRIPLETS)) {
     $env:VCPKG_OVERLAY_TRIPLETS = join-path $OVERLAY_PORTS 'triplets/community'
@@ -381,13 +381,13 @@ $path_sep = [system.io.path]::pathseparator
 
 $script:saved_env = [ordered]@{}
 
-function save_env {
+function save-env {
     $script:saved_env.clear()
 
     gci env: | %{ $script:saved_env[$_.name] = $_.value }
 }
 
-function restore_env {
+function restore-env {
     if (-not $script:saved_env.count) { return }
 
     ri -force env:*
@@ -421,7 +421,7 @@ if ($iswindows) {
         $default_arch = $env:PROCESSOR_ARCHITECTURE.tolower()
         $vcvarsall = resolve-path "$vs_path/../../VC/Auxiliary/Build/vcvarsall.bat"
 
-        function vsenv {
+        function set-vsenv {
             param($arch, $toolkit, [switch]$unload)
 
             # These are semicolon-separated list vars that vcvarsall prepends to.
@@ -429,7 +429,7 @@ if ($iswindows) {
 
             # Capture current list var values BEFORE unloading.  For
             # LIB/INCLUDE/LIBPATH this preserves user additions (e.g. vcpkg)
-            # that were appended after the previous vsenv call.
+            # that were appended after the previous set-vsenv call.
             $pre_unload = @{}
             foreach ($lv in $list_vars) {
                 $pre_unload[$lv] = (get-item -literalpath "env:$lv" -ea ignore).value
@@ -440,11 +440,11 @@ if ($iswindows) {
 
             # Regex matching VS/SDK/WinKits/.NET/.NET-adjacent PATH entries added by
             # vcvarsall, used to strip the inherited PATH when starting a new shell
-            # that already has a vsenv'd PATH from its parent process, and to strip
+            # that already has a set-vsenv'd PATH from its parent process, and to strip
             # any that are left in PATH when unloading.
             $vs_strip_re = '[/\\]Microsoft Visual Studio[/\\]|[/\\]Microsoft SDKs[/\\]|[/\\]Windows Kits[/\\](?:[^/\\]+[/\\](?:bin|lib|include|UnionMetadata|References)[/\\]|NETFXSDK[/\\])|[/\\]Microsoft\.NET[/\\]|[/\\]HTML Help Workshop'
 
-            # Unload previous vsenv state.
+            # Unload previous set-vsenv state.
             if ($script:vsenv_state) {
                 # Restore PATH and list vars (INCLUDE, LIB, LIBPATH).
                 $script:vsenv_state.saved_lists.getenumerator() | %{
@@ -485,7 +485,7 @@ if ($iswindows) {
 
             if ($unload) { return }
 
-            # Strip stale VCPKG_ROOT from PATH if it changed since last vsenv
+            # Strip stale VCPKG_ROOT from PATH if it changed since last set-vsenv
             # call — must happen before $post_unload_path AND before vcvarsall
             # (which inherits $env:Path) so neither sees the old entry.
             $vcpkg_root_trimmed = if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT.trimend('/\') } else { $null }
@@ -550,7 +550,7 @@ if ($iswindows) {
             $list_vars | ?{ $_ -ine 'PATH' } | %{ remove-item -literalpath "env:$_" -ea ignore }
 
             $vcvars_cmd = "$script:vcvarsall $($vcvars_args -join ' ')"
-            write-verbose "vsenv: $vcvars_cmd"
+            write-verbose "set-vsenv: $vcvars_cmd"
 
             $output = cmd /c "`"$script:vcvarsall`" $($vcvars_args -join ' ') && set" 2>&1
 
@@ -678,19 +678,19 @@ if ($iswindows) {
                 elseif ($name -like '__VSCMD_PREINIT_*') {
                     # vcvarsall records pre-call values of VS vars as __VSCMD_PREINIT_*
                     # when it finds them already set (e.g. inherited from a parent shell).
-                    # vsenv manages its own state so these are unnecessary; discard them.
+                    # set-vsenv manages its own state so these are unnecessary; discard them.
                     remove-item -literalpath "env:$name" -ea ignore
                 }
                 elseif ($name -ine 'VCPKG_ROOT') {
                     # VCPKG_ROOT is managed separately via $saved_vcpkg_root; excluding it
-                    # here prevents the unload phase from clobbering it between vsenv calls.
+                    # here prevents the unload phase from clobbering it between set-vsenv calls.
                     $current = (get-item -literalpath "env:$name" -ea ignore).value
 
                     # `set` lists the whole environment, not just what vcvarsall
                     # changed, and what it merely passed through is the caller's,
                     # not something to put back on the next call. Recording those
                     # too made every variable the caller sets before calling this
-                    # one revert to its value of the previous call: setup_build_env
+                    # one revert to its value of the previous call: enter-buildenv
                     # points VCPKG_OVERLAY_TRIPLETS at triplets-v143 and then calls
                     # this, which put back the triplets-default of the pass before,
                     # so every v143 package was built with the newest toolset.
@@ -706,7 +706,7 @@ if ($iswindows) {
             }
 
             if ($toolkit -and -not $env:VCToolsVersion) {
-                write-warning "vsenv: toolset '$toolkit' was not selected by vcvarsall. Run with -verbose to see vcvarsall output."
+                write-warning "set-vsenv: toolset '$toolkit' was not selected by vcvarsall. Run with -verbose to see vcvarsall output."
             }
 
             $script:vsenv_state = $state
@@ -715,7 +715,7 @@ if ($iswindows) {
 }
 
 # vcpkg-list and vcpkg-mkpkg live in their own repo.
-# setup_build_env pulls them in, once per session.
+# enter-buildenv pulls them in, once per session.
 # One updater per checkout at a time.
 #
 # The tasks overlap by design -- update-repos runs on the hour, the nightlies
@@ -736,7 +736,7 @@ if ($iswindows) {
 # Keyed on the resolved path, so two spellings of one checkout share a lock, and
 # kept in TEMP, which is per-user and therefore the same directory for the tasks
 # -- they run as this user under s4u -- and for a manual run.
-# The lock files this session has made, for remove_git_locks below to clear out.
+# The lock files this session has made, for remove-gitlocks below to clear out.
 $script:git_lock_files = [System.Collections.Generic.HashSet[string]]::new(
     [StringComparer]::OrdinalIgnoreCase)
 
@@ -748,19 +748,19 @@ $script:git_lock_files = [System.Collections.Generic.HashSet[string]]::new(
 # "inuse" is held by a run across everything it does with a checkout, which for
 # a nightly is hours. update-repos pulls the vcpkg tree every hour, and a pull
 # landing mid-run moves the ports underneath it: a host tool that was current
-# when refresh_host_tools looked is stale an hour later, and the next install
+# when update-hosttools looked is stale an hour later, and the next install
 # that wants it rebuilds it and every dependent across every triplet in one
 # plan, under whichever environment that pass happens to have. That is how
 # ffmpeg:x86-mingw-static came out built with cl.exe on 09-22.
 #
 # The two must not be the same lock. A run holding "git" for its whole duration
-# would block its own update_vcpkg, which takes "git" for each pull it makes.
+# would block its own update-vcpkg, which takes "git" for each pull it makes.
 #
 # A timeout of 0 or less asks once and gives up, which is what a caller wanting
 # to skip a busy checkout rather than wait out a nightly passes.
 # Where a checkout's lock of the given kind lives. One definition, so that
-# holds_git_lock below and acquire_git_lock cannot disagree about it.
-function git_lock_path([string]$path, [string]$kind = 'git') {
+# test-gitlock below and lock-git cannot disagree about it.
+function get-gitlockpath([string]$path, [string]$kind = 'git') {
     $full = $(if ($resolved = resolve-path $path -ea ignore) { $resolved.path } else { $path })
     $key  = $full.Replace('/', '\').TrimEnd('\').ToLower()
     $hash = [BitConverter]::ToString(
@@ -773,13 +773,13 @@ function git_lock_path([string]$path, [string]$kind = 'git') {
 
 # Whether this process is already holding that lock, so it never goes asking
 # for one it has and waits on itself.
-function holds_git_lock([string]$path, [string]$kind = 'git') {
-    $script:git_lock_files.Contains((git_lock_path $path $kind))
+function test-gitlock([string]$path, [string]$kind = 'git') {
+    $script:git_lock_files.Contains((get-gitlockpath $path $kind))
 }
 
-function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800, [string]$kind = 'git') {
+function lock-git([string]$path, [int]$timeout_seconds = 1800, [string]$kind = 'git') {
     $full      = $(if ($resolved = resolve-path $path -ea ignore) { $resolved.path } else { $path })
-    $lock_path = git_lock_path $path $kind
+    $lock_path = get-gitlockpath $path $kind
     $deadline  = (get-date).AddSeconds($timeout_seconds)
     $waited    = $false
 
@@ -826,7 +826,7 @@ function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800, [string]$
 #
 # Always in the same order, so two runs asking for the whole set take them in
 # the same sequence and cannot each end up holding what the other waits for.
-function vcpkg_tree_paths() {
+function get-vcpkgtrees() {
     $root = join-path $script:REPOS_ROOT vcpkg
 
     @($root) + @($script:TOOLKITS | ?{ $_ } | sort-object | %{ "$root-$_" })
@@ -842,7 +842,7 @@ $LOW_DISK_GB = 50
 # question cannot be answered -- a path on no volume this process can see, or
 # a platform where DriveInfo declines. A caller that cannot get a number
 # carries on: this is here to explain a failure, never to cause one.
-function free_space_gb([string]$path) {
+function get-freespace([string]$path) {
     try {
 	$root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($path))
 
@@ -873,8 +873,8 @@ function free_space_gb([string]$path) {
 # half-applied checkout in the vcpkg tree and four days of x86 and arm64
 # builds, and nothing in any log said "the disk is full" until someone went
 # looking. So every run now records the number it started with.
-function report_free_space([string]$path) {
-    $free = free_space_gb $path
+function show-freespace([string]$path) {
+    $free = get-freespace $path
 
     if ($null -eq $free) { return }
 
@@ -888,7 +888,7 @@ function report_free_space([string]$path) {
     }
 }
 
-function release_git_lock($lock) {
+function unlock-git($lock) {
     if (-not $lock) { return }
 
     $lock_file = $lock.Name
@@ -897,7 +897,7 @@ function release_git_lock($lock) {
 
     # Where the lock files actually get cleared: releasing is the one point
     # that is reached on every path, the callers all releasing in a finally.
-    # remove_git_locks below is a sweep for what a caller did not get to.
+    # remove-gitlocks below is a sweep for what a caller did not get to.
     #
     # Deleting is safe only because the handle is opened with FileShare.None:
     # Windows refuses to delete a file another process still holds open, so the
@@ -911,10 +911,10 @@ function release_git_lock($lock) {
     [void]$script:git_lock_files.Remove($lock_file)
 }
 
-# The sweep for locks release_git_lock did not get to, on the same terms: a
+# The sweep for locks unlock-git did not get to, on the same terms: a
 # delete that fails is a lock somebody else is holding, which is the one to
 # leave alone.
-function remove_git_locks {
+function remove-gitlocks {
     foreach ($lock_file in @($script:git_lock_files)) {
         remove-item $lock_file -force -ea ignore
 
@@ -926,10 +926,10 @@ function remove_git_locks {
 # replaces. It is the only teardown hook that runs: PowerShell.Exiting and
 # AppDomain.ProcessExit were both tried here and neither fires for
 # `powershell.exe -File` or `-Command`, which is how every task starts, so
-# nothing runs at the end of a run and release_git_lock has to do the work.
+# nothing runs at the end of a run and unlock-git has to do the work.
 # Nothing runs if the process is killed either, and nothing can -- what is left
 # behind is an empty file the next run opens again, so the cost of that is nil.
-$ExecutionContext.SessionState.Module.OnRemove = { remove_git_locks }
+$ExecutionContext.SessionState.Module.OnRemove = { remove-gitlocks }
 
 # Bring a checkout up to date, cloning it first if it is not there, with the
 # lock above held for the whole of it so that two runs queue instead of racing.
@@ -940,8 +940,8 @@ $ExecutionContext.SessionState.Module.OnRemove = { remove_git_locks }
 #
 # Callers that need a wider critical section than one update -- build-nightly
 # decides whether to build from what the fetch brought in and only then pulls,
-# and the wxwidgets bump commits and pushes -- take acquire_git_lock themselves.
-function update_git_checkout {
+# and the wxwidgets bump commits and pushes -- take lock-git themselves.
+function update-checkout {
     param(
 	[parameter(mandatory)][string]$path,
 	[string]$origin,
@@ -951,21 +951,21 @@ function update_git_checkout {
     # git says everything it does on stderr, "From github.com:..." included, and
     # Windows PowerShell turns a native command's redirected stderr into a
     # NativeCommandError that erroractionpreference stop makes terminating. See
-    # vcpkg_run above. The exit status is what says whether git worked.
+    # invoke-vcpkg above. The exit status is what says whether git worked.
     #
-    # Belt and braces now that the calls below go through git_run, which sets
+    # Belt and braces now that the calls below go through invoke-git, which sets
     # the same preference and flattens the record back into the line git wrote
     # rather than leaving the log to wrap it in CategoryInfo. Left here for the
     # git that gets added next without anyone thinking about stderr.
     #
     # The two exceptions are the rev-parse and the status below, whose output
-    # is read rather than logged. git_run merges stderr into what it returns,
+    # is read rather than logged. invoke-git merges stderr into what it returns,
     # which is the last thing either wants: a stray warning would be taken for
     # the branch name, and the [-1] on the rev-parse is there because that has
     # happened.
     $erroractionpreference = 'continue'
 
-    $lock = acquire_git_lock $path
+    $lock = lock-git $path
 
     try {
 	if (-not (test-path $path)) {
@@ -978,7 +978,7 @@ function update_git_checkout {
 
 	    if ($parent -and -not (test-path $parent)) { ni -it dir $parent -force | out-null }
 
-	    git_run clone $origin $path
+	    invoke-git clone $origin $path
 
 	    if ($lastexitcode -ne 0) {
 		write-warning "cloning $origin into ${path}: git exited $lastexitcode"
@@ -998,11 +998,11 @@ function update_git_checkout {
 		    return
 		}
 
-		git_run init
-		git_run remote add origin $origin
-		git_run fetch --all --prune
-		git_run reset --hard origin/master
-		git_run branch --set-upstream-to=origin/master master
+		invoke-git init
+		invoke-git remote add origin $origin
+		invoke-git fetch --all --prune
+		invoke-git reset --hard origin/master
+		invoke-git branch --set-upstream-to=origin/master master
 	    }
 
 	    # Last line, so a stray warning from git cannot be mistaken for the branch.
@@ -1018,8 +1018,8 @@ function update_git_checkout {
 		return
 	    }
 
-	    git_run fetch --all --prune
-	    git_run pull --rebase
+	    invoke-git fetch --all --prune
+	    invoke-git pull --rebase
 
 	    if ($lastexitcode -ne 0) {
 		write-warning "Updating '$path' failed, git pull exited with $lastexitcode."
@@ -1027,16 +1027,16 @@ function update_git_checkout {
 	    }
 
 	    if ($submodules) {
-		git_run submodule update --init --recursive
-		git_run submodule update
+		invoke-git submodule update --init --recursive
+		invoke-git submodule update
 	    }
 	}
 	finally { popd }
     }
-    finally { release_git_lock $lock }
+    finally { unlock-git $lock }
 }
-function update_binpkg_module {
-    update_git_checkout "$script:REPOS_ROOT/vcpkg-binpkg-prototype" `
+function update-binpkgmodule {
+    update-checkout "$script:REPOS_ROOT/vcpkg-binpkg-prototype" `
 	-origin git@github.com:rkitover/vcpkg-binpkg-prototype
 
     import-module -global -force "$script:REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
@@ -1044,7 +1044,7 @@ function update_binpkg_module {
 
 # Whether bootstrap could replace the exe if it were run. Absent is writable:
 # putting it there for the first time is what a bootstrap is for.
-function vcpkg_exe_writable([string]$vcpkg_dir) {
+function test-vcpkgwritable([string]$vcpkg_dir) {
     $exe = join-path $vcpkg_dir $(if ($iswindows) { 'vcpkg.exe' } else { 'vcpkg' })
 
     if (-not (test-path $exe)) { return $true }
@@ -1059,11 +1059,11 @@ function vcpkg_exe_writable([string]$vcpkg_dir) {
     catch { $false }
 }
 
-function update_vcpkg([string]$toolkit = '') {
-    # bootstrap-vcpkg's download chatter goes to stderr; see vcpkg_run above. A
+function update-vcpkg([alias('tk')][string]$toolkit = '') {
+    # bootstrap-vcpkg's download chatter goes to stderr; see invoke-vcpkg above. A
     # tree that cannot be bootstrapped is not a reason to abandon the run, the
     # exe already on disk still builds. The checkouts look after themselves --
-    # update_git_checkout relaxes the preference of its own.
+    # update-checkout relaxes the preference of its own.
     $erroractionpreference = 'continue'
 
     $vcpkg_dir = if ($toolkit) { $env:VCPKG_ROOT.TrimEnd('/\') + "-$toolkit" } else { $env:VCPKG_ROOT }
@@ -1080,18 +1080,18 @@ function update_vcpkg([string]$toolkit = '') {
     # Asked for and let go rather than held: holding it for the length of a
     # build is what the caller does. This process holding it already is the
     # ordinary case, and must not be made to queue behind itself.
-    if (holds_git_lock $vcpkg_dir 'inuse') {
+    if (test-gitlock $vcpkg_dir 'inuse') {
         $may_update = $true
     }
     else {
-        $probe      = acquire_git_lock $vcpkg_dir -timeout_seconds 0 -kind 'inuse'
+        $probe      = lock-git $vcpkg_dir -timeout_seconds 0 -kind 'inuse'
         $may_update = [bool]$probe
 
-        release_git_lock $probe
+        unlock-git $probe
     }
 
     if ($may_update) {
-        update_git_checkout $vcpkg_dir -origin git@github.com:microsoft/vcpkg
+        update-checkout $vcpkg_dir -origin git@github.com:microsoft/vcpkg
     }
     else {
         write-warning "another run is building out of $vcpkg_dir; leaving it at the commit it has"
@@ -1103,7 +1103,7 @@ function update_vcpkg([string]$toolkit = '') {
     # then fails on a file it cannot open and says so in a page of error
     # formatting, having interrupted nothing but itself. Ask whether the file
     # can be written before trying, and leave the bootstrap to the run that can.
-    if (vcpkg_exe_writable $vcpkg_dir) {
+    if (test-vcpkgwritable $vcpkg_dir) {
         pushd $vcpkg_dir
 
         if ($iswindows) { ./bootstrap-vcpkg.bat }
@@ -1116,7 +1116,7 @@ function update_vcpkg([string]$toolkit = '') {
     }
 
     if (-not $islinux) {
-        update_git_checkout $env:VCPKG_OVERLAY_PORTS `
+        update-checkout $env:VCPKG_OVERLAY_PORTS `
             -origin git@github.com:visualboyadvance-m/vcpkg-overlay
     }
 }
@@ -1127,7 +1127,7 @@ $script:current_toolkit   = $null
 $script:updated_toolkits  = @{}
 $script:updated_binpkg    = $false
 
-function rewrite_vcpkg_root([string]$old_root, [string]$new_root) {
+function update-vcpkgroot([string]$old_root, [string]$new_root) {
     # Both scopes. The global one is what the scripts see; the module's own is
     # what the functions in this file resolve, and they do not see the global
     # one, so rebinding only there left everything inside the module running
@@ -1158,12 +1158,12 @@ function rewrite_vcpkg_root([string]$old_root, [string]$new_root) {
     }
 }
 
-function setup_build_env([string]$triplet, [string]$toolkit = '') {
+function enter-buildenv([alias('t')][string]$triplet, [alias('tk')][string]$toolkit = '') {
     # Before the early return below: the packaging commands are wanted on every
     # platform, and off Windows this is the only part of the setup that runs.
     if (-not $script:updated_binpkg) {
         $script:updated_binpkg = $true
-        update_binpkg_module
+        update-binpkgmodule
     }
 
     if (-not $iswindows) { return }
@@ -1174,7 +1174,7 @@ function setup_build_env([string]$triplet, [string]$toolkit = '') {
 
     if (-not $script:updated_toolkits[$toolkit]) {
         $script:updated_toolkits[$toolkit] = $true
-        update_vcpkg $toolkit
+        update-vcpkg $toolkit
     }
 
     if (($arch -eq $script:current_arch) -and ($toolchain -eq $script:current_toolchain) -and ($toolkit -eq $script:current_toolkit)) { return }
@@ -1183,12 +1183,12 @@ function setup_build_env([string]$triplet, [string]$toolkit = '') {
     $script:current_toolchain = $toolchain
     $script:current_toolkit   = $toolkit
 
-    restore_env
-    save_env
+    restore-env
+    save-env
 
     $old_vcpkg_root = $env:VCPKG_ROOT
     if ($toolkit) { $env:VCPKG_ROOT = $env:VCPKG_ROOT.TrimEnd('/\') + "-$toolkit" }
-    rewrite_vcpkg_root $old_vcpkg_root $env:VCPKG_ROOT
+    update-vcpkgroot $old_vcpkg_root $env:VCPKG_ROOT
 
     # Each toolkit's directory holds a triplet that pins its toolset; the
     # default one's holds the arm64 pair, which name the newest toolset that
@@ -1207,25 +1207,32 @@ function setup_build_env([string]$triplet, [string]$toolkit = '') {
 	}
     }
     else { # MSVC
-	vsenv $arch $toolkit
+	set-vsenv $arch $toolkit
     }
 }
 
-function teardown_build_env {
+function exit-buildenv {
     $old_vcpkg_root = $env:VCPKG_ROOT
-    restore_env
-    rewrite_vcpkg_root $old_vcpkg_root $env:VCPKG_ROOT
+    restore-env
+    update-vcpkgroot $old_vcpkg_root $env:VCPKG_ROOT
     $script:vsenv_state       = $null
     $script:current_arch      = $null
     $script:current_toolchain = $null
     $script:current_toolkit   = $null
     $script:updated_toolkits.clear()
     # $script:updated_binpkg is deliberately not reset: an imported module is
-    # not part of the environment restore_env puts back, so a later
-    # setup_build_env would only re-clone and re-import what is already here.
+    # not part of the environment restore-env puts back, so a later
+    # enter-buildenv would only re-clone and re-import what is already here.
 }
 
-function get-triplets {
+# The triplets a run is for: the ones its arguments name, or the platform's own
+# list when they name none, with the host triplet moved to the front.
+#
+# Resolve rather than get, because what comes back is worked out -- the
+# arguments are read, --toolkit and --android decide what the set means, and
+# every triplet in it is checked against what this platform builds -- rather
+# than looked up.
+function resolve-triplets {
     if ($myinvocation.expectinginput) { $args = @($input) }
 
     $toolkit     = ''
@@ -1249,7 +1256,7 @@ function get-triplets {
             # toolkit unset and every x86/x64 Windows triplet kept its default
             # pair -- the run built both toolsets, twice the work asked for,
             # and said nothing about why.
-            write-error ("get-triplets: unknown argument '" + $args[$i] + "'; expected --triplets, --toolkit, --android or --force") -ea stop
+            write-error ("resolve-triplets: unknown argument '" + $args[$i] + "'; expected --triplets, --toolkit, --android or --force") -ea stop
         }
     }
 
@@ -1306,7 +1313,7 @@ function get-triplets {
     # and the trimmed request on its own pass read as already installed and
     # changed nothing. Built first, the list's own spec is what lands, and the
     # cross passes find it there and leave it alone.
-    $host_t = get_host_triplet
+    $host_t = get-hosttriplet
 
     if ("$host_t" -in @($requested_triplets)) {
 	$requested_triplets = @($host_t) + @($requested_triplets | ?{ $_ -ne $host_t })
@@ -1321,7 +1328,7 @@ function get-triplets {
         $unsupported = @($requested_triplets | ?{ $_ -notmatch $toolkit_triplet_re })
 
         if ($unsupported) {
-            write-error ("get-triplets: toolkit '" + $toolkit + "' does not apply to: " + ($unsupported -join ', ')) -ea stop
+            write-error ("resolve-triplets: toolkit '" + $toolkit + "' does not apply to: " + ($unsupported -join ', ')) -ea stop
         }
     }
 
@@ -1355,7 +1362,7 @@ function get-triplets {
 # The emulator's own CMakeLists drops it for the same triplet, from
 # VBAM_TARGET_WINXP. Both have to agree: this list is what the builder
 # pre-builds and publishes, and that one is what a build asks vcpkg for.
-function get_dep_ports([string]$triplet = '') {
+function get-depports([alias('t')][string]$triplet = '') {
     if ($triplet -match '-android$') { return $script:ANDROID_DEP_PORTS }
 
     if ($triplet -match '^x86-mingw') {
@@ -1373,14 +1380,14 @@ function get_dep_ports([string]$triplet = '') {
 # a build, nothing for anything else. A target triplet -- -static, mingw,
 # android -- gets none of it: the tools run on the builder, which is the host
 # triplet's copy, and building them for the target would be building a compiler
-# for the wrong machine. Kept apart from get_dep_ports because that list is what
+# for the wrong machine. Kept apart from get-depports because that list is what
 # a build *links*, which every triplet needs a copy of.
-function get_host_dep_ports([string]$triplet = '') {
+function get-hostdepports([alias('t')][string]$triplet = '') {
     if ("$triplet" -in $script:HOST_TRIPLETS) { $script:HOST_DEP_PORTS } else { @() }
 }
 
 # Plans already read, keyed by triplet, host triplet and the tree they came
-# from. See get_host_ports below.
+# from. See get-hostports below.
 $script:host_plans = @{}
 
 # vcpkg's own install plan for one triplet, as the lines vcpkg prints it in,
@@ -1393,9 +1400,9 @@ $script:host_plans = @{}
 # A triplet vcpkg cannot plan is a warning and an empty plan, not the end of a
 # nightly: riscv64-android is the one that can go missing. A caller that needs
 # the plan to be right about something decides for itself what to do without
-# one -- enforce_core_features leaves every feature set alone rather than
+# one -- repair-corefeatures leaves every feature set alone rather than
 # narrow one on a guess.
-function get_install_plan([string]$triplet, [string]$host_triplet,
+function get-installplan([alias('t')][string]$triplet, [alias('ht')][string]$host_triplet,
                           [scriptblock]$plan_for = $null) {
     # The plan is captured with 2>&1 so a failure can be reported with what
     # vcpkg said about it. Under Windows PowerShell -- which is what the
@@ -1410,7 +1417,7 @@ function get_install_plan([string]$triplet, [string]$host_triplet,
     # ports, -Tools, the feature sets -- and a host triplet is asked about once
     # per toolkit, so read vcpkg once and keep it. The tree it was read from is
     # part of the key: on Windows every toolkit has its own, and VCPKG_ROOT is
-    # what setup_build_env moves.
+    # what enter-buildenv moves.
     $key = "$triplet|$host_triplet|$env:VCPKG_ROOT|$env:VCPKG_OVERLAY_PORTS"
 
     if ((-not $plan_for) -and $script:host_plans.contains($key)) {
@@ -1444,7 +1451,7 @@ function get_install_plan([string]$triplet, [string]$host_triplet,
     $default_plan_for = {
         param($t)
 
-        $ports = @(get_dep_ports $t)
+        $ports = @(get-depports $t)
 
         vcpkg install --dry-run @overlay_args --x-install-root=$plan_root `
             --triplet $t --host-triplet $host_triplet `
@@ -1481,7 +1488,7 @@ function get_install_plan([string]$triplet, [string]$host_triplet,
 # that and records the closure as what is installed, so a list naming the
 # features the build actually wants can never equal what ends up on disk.
 #
-# enforce_core_features compared the two and found qtbase widened on every
+# repair-corefeatures compared the two and found qtbase widened on every
 # triplet of every run: it removed it, vcpkg reinstalled the same closure, and
 # the next run found the same difference again. On 2026-11-22 that was twelve
 # qtbase and qttools rebuilt three times over on posixsh alone -- and since a
@@ -1496,11 +1503,11 @@ function get_install_plan([string]$triplet, [string]$host_triplet,
 # plan says the port's defaults are still on, which means what gets installed
 # is not what the plan lists. A caller comparing against an installed set has
 # to leave such a port alone, and this is what tells it to.
-function planned_features([string]$triplet, [string]$host_triplet,
+function get-plannedfeatures([alias('t')][string]$triplet, [alias('ht')][string]$host_triplet,
                           [scriptblock]$plan_for = $null) {
     $features = @{}
 
-    foreach ($line in @(get_install_plan $triplet $host_triplet $plan_for)) {
+    foreach ($line in @(get-installplan $triplet $host_triplet $plan_for)) {
         # "  * qtbase[core,gui]:arm64-android@6.11.2#2", with " -- <port dir>"
         # after the version for an overlay port.
         if ("$line" -notmatch '^\s*\*?\s*([^\s:\[\]]+)(?:\[([^\]]*)\])?:([^\s@]+)@') { continue }
@@ -1558,7 +1565,7 @@ function planned_features([string]$triplet, [string]$host_triplet,
 # parameter so the parsing below can be checked against a captured plan
 # without a vcpkg to run; nothing but the tests passes it, and a plan it
 # supplies is never cached.
-function get_host_ports([string[]]$for_triplets, [string]$host_triplet,
+function get-hostports([string[]]$for_triplets, [alias('ht')][string]$host_triplet,
                         [scriptblock]$plan_for = $null, [switch]$Tools) {
     $features     = [ordered]@{}
     # Ports the plan puts on some triplet other than the host's: what the build
@@ -1567,7 +1574,7 @@ function get_host_ports([string[]]$for_triplets, [string]$host_triplet,
     $target_ports = @{}
 
     foreach ($t in $for_triplets) {
-        foreach ($line in @(get_install_plan $t $host_triplet $plan_for)) {
+        foreach ($line in @(get-installplan $t $host_triplet $plan_for)) {
             # "  * icu[core,tools]:x64-windows@78.3#2", with " -- <port dir>"
             # after the version for an overlay port. Both the packages the plan
             # would build and the ones it reports already installed are wanted:
@@ -1605,7 +1612,7 @@ function get_host_ports([string[]]$for_triplets, [string]$host_triplet,
 # ffmpeg-bin2c, pkgconf, the vcpkg-* script ports -- brought up to date on the
 # host triplet before any target pass can be the one that does it.
 #
-# Third in the series that upgrade_port in vcpkg-daily.ps1 and the sweep at the
+# Third in the series that update-port in vcpkg-daily.ps1 and the sweep at the
 # foot of build-deps.ps1 begin. Those two keep a cross-triplet plan out of
 # `vcpkg upgrade`; this keeps one out of `vcpkg install`. A host tool going out
 # of date is enough to get there: ffmpeg-bin2c carries ffmpeg's own version, so
@@ -1631,7 +1638,7 @@ function get_host_ports([string[]]$for_triplets, [string]$host_triplet,
 # each triplet's own pass reinstalls its own copy under its own environment,
 # which is the only place a mingw one can come out right.
 # Whether a run covers everything, which is what makes refreshing a shared host
-# tool safe to do: see refresh_host_tools below.
+# tool safe to do: see update-hosttools below.
 #
 # Naming a package or a triplet narrows it. The order the triplets arrive in
 # does not matter, only the set.
@@ -1641,7 +1648,7 @@ function get_host_ports([string[]]$for_triplets, [string]$host_triplet,
 # as the platform's and every narrowed run compares equal to itself and comes
 # out whole, which is the answer that lets a refresh take 39 packages out of a
 # run that is building one.
-function is_whole_run([string[]]$run_triplets,
+function test-wholerun([string[]]$run_triplets,
                       [string[]]$packages = @(), [string[]]$skip_packages = @()) {
     if ($packages -or $skip_packages) { return $false }
 
@@ -1655,7 +1662,7 @@ function is_whole_run([string[]]$run_triplets,
 # building the lot puts them back. `--triplets x86-mingw-static --packages
 # sdl3` removed 39 packages for eight triplets and then rebuilt one, which is
 # the same shape as the failure this function exists to prevent.
-function refresh_host_tools([string[]]$run_triplets, [string]$host_triplet, [string]$toolkit,
+function update-hosttools([string[]]$run_triplets, [alias('ht')][string]$host_triplet, [alias('tk')][string]$toolkit,
                             [switch]$WholeRun) {
     if (-not $host_triplet) { return }
 
@@ -1669,13 +1676,13 @@ function refresh_host_tools([string[]]$run_triplets, [string]$host_triplet, [str
 
     if (-not $cross) { return }
 
-    $tools = @(get_host_ports $cross $host_triplet -Tools)
+    $tools = @(get-hostports $cross $host_triplet -Tools)
 
     if (-not $tools) { return }
 
     "Refreshing the host tooling on $host_triplet$(if ($toolkit) { " ($toolkit)" }): $($tools -join ', ')"
 
-    setup_build_env $host_triplet $toolkit
+    enter-buildenv $host_triplet $toolkit
 
     foreach ($tool in $tools) {
         $name = $tool -replace '\[[^\]]+\]',''
@@ -1693,7 +1700,7 @@ function refresh_host_tools([string[]]$run_triplets, [string]$host_triplet, [str
         # exact thing this function exists to prevent.
         #
         # upgrade is a dry run unless told otherwise, so this builds nothing.
-        $plan = @(vcpkg_run --triplet $host_triplet --host-triplet $host_triplet upgrade `
+        $plan = @(invoke-vcpkg --triplet $host_triplet --host-triplet $host_triplet upgrade `
                       --no-binarycaching --allow-unsupported $name 2>&1 | %{ "$_" })
 
         # The tool itself, not merely something in its plan: a dependent that
@@ -1723,9 +1730,9 @@ function refresh_host_tools([string[]]$run_triplets, [string]$host_triplet, [str
         # For a script port everything declares, that is close to the whole
         # tree. It is also the work an upgrade of it would have done anyway,
         # only now spread across the passes that can each do it correctly.
-        vcpkg_run --triplet $host_triplet remove --recurse "${name}:$host_triplet"
+        invoke-vcpkg --triplet $host_triplet remove --recurse "${name}:$host_triplet"
 
-        vcpkg_run --triplet $host_triplet --host-triplet $host_triplet install `
+        invoke-vcpkg --triplet $host_triplet --host-triplet $host_triplet install `
             --no-binarycaching --allow-unsupported --recurse --keep-going $tool
     }
 }
@@ -1741,13 +1748,13 @@ function refresh_host_tools([string[]]$run_triplets, [string]$host_triplet, [str
 #
 # Copy them out under the date instead, which is what makes the log directory
 # cumulative rather than a window one run deep.
-function archive_build_logs([string]$port, [string]$triplet, [string]$toolkit = '') {
+function save-buildlogs([string]$port, [alias('t')][string]$triplet, [alias('tk')][string]$toolkit = '') {
     # Nothing here may take the run down. It is called from the failure path,
     # which is the worst place to turn one problem into two, and it did: the
     # 09-28 nightly died at the first build it went to report, because $ROOT
     # is empty on the builder -- where the logs live at /logs -- and join-path
     # refuses an empty component. The paths below are built by interpolation
-    # for that reason, the way task_action builds the log path it redirects to.
+    # for that reason, the way get-taskaction builds the log path it redirects to.
     $erroractionpreference = 'continue'
 
     $src = join-path $env:VCPKG_ROOT "buildtrees/$port"
@@ -1792,7 +1799,7 @@ function archive_build_logs([string]$port, [string]$triplet, [string]$toolkit = 
 # outside it. The year is inferred, and a line that will not parse is left out
 # altogether, which reads downstream as "no idea when, so publish it" -- the
 # safe way round.
-function parse_sftp_listing([string[]]$lines, [datetime]$now = (get-date)) {
+function convertfrom-sftplisting([string[]]$lines, [datetime]$now = (get-date)) {
     $listing = @{}
 
     foreach ($line in @($lines)) {
@@ -1847,7 +1854,7 @@ function parse_sftp_listing([string[]]$lines, [datetime]$now = (get-date)) {
     $listing
 }
 
-# What the server holds in one package directory, as parse_sftp_listing gives
+# What the server holds in one package directory, as convertfrom-sftplisting gives
 # it back. An empty answer covers a directory that is empty, missing or
 # unreadable alike, and all three read the same way downstream: publish it.
 #
@@ -1855,14 +1862,14 @@ function parse_sftp_listing([string[]]$lines, [datetime]$now = (get-date)) {
 # pass in vcpkg-daily.ps1 gives at length: sftp says hello on stderr, Windows
 # PowerShell turns a native command's redirected stderr into a record, and stop
 # would make the greeting fatal.
-function remote_package_listing([string]$remote_dir) {
+function get-remotepackages([string]$remote_dir) {
     $lines = & {
         $erroractionpreference = 'continue'
 
         @('ls -l' | sftp "sftpuser@nightly.visualboyadvance-m.org:nightly.visualboyadvance-m.org/$remote_dir" 2>$null)
     }
 
-    parse_sftp_listing @($lines | %{ "$_" })
+    convertfrom-sftplisting @($lines | %{ "$_" })
 }
 
 # Whether a package built at $built wants publishing over what the server has.
@@ -1871,7 +1878,7 @@ function remote_package_listing([string]$remote_dir) {
 # goes. sftp reports minutes and no seconds, so a copy uploaded in the same
 # minute as the build can read as older than it; $slack covers that truncation
 # and nothing else, an actual rebuild being nowhere near that close.
-function package_needs_publishing([hashtable]$remote, [string]$port, [datetime]$built,
+function test-publishneeded([hashtable]$remote, [string]$port, [datetime]$built,
                                   [timespan]$slack = [timespan]::FromMinutes(2)) {
     if ((-not $remote) -or (-not $remote.contains($port))) { return $true }
 
@@ -1894,7 +1901,7 @@ function package_needs_publishing([hashtable]$remote, [string]$port, [datetime]$
 # answer and neither is there for every package -- of the 307 installed on this
 # builder 68 carry no Abi: and 32 have no vcpkg_abi_info.txt -- where every
 # installed package has a .list, that being how vcpkg knows what to delete.
-function installed_package_stamps([string]$vcpkg_root = '') {
+function get-packagestamps([string]$vcpkg_root = '') {
     if (-not $vcpkg_root) { $vcpkg_root = $env:VCPKG_ROOT }
 
     $stamps = @{}
@@ -1913,7 +1920,7 @@ function installed_package_stamps([string]$vcpkg_root = '') {
     $stamps
 }
 
-function get_host_triplet {
+function get-hosttriplet {
     $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
         'Arm64' { 'arm64' }
         'X64'   { 'x64' }
@@ -1944,7 +1951,7 @@ function get_host_triplet {
 # nothing reads as one thing. out-file's default parameter values reach the
 # operator too, so set the encoding there. .NET writes the BOM only at position
 # zero, so appending to an existing log does not sprinkle more through it.
-function task_action {
+function get-taskaction {
     param(
 	[parameter(mandatory)][string]$script,
 	[parameter(mandatory)][string]$log,
@@ -1965,12 +1972,48 @@ function task_action {
 	    " *>> $script:ROOT/logs/$log")
 }
 
+# Short names for a prompt, where a name is being typed rather than read. A
+# script keeps the full one: it is read far more often than it is written, and
+# an initialism is no use to someone reading it for the first time.
+#
+# The verb's initial and the noun's, from the words the name spells out:
+# get-hostdepports is ghdp. None of these is a name either edition of
+# PowerShell already has -- get-packagestamps would be gps, which is
+# Get-Process, so it is gpstamp.
+set-alias -force ebe     enter-buildenv
+set-alias -force xbe     exit-buildenv
+set-alias -force rt      resolve-triplets
+set-alias -force ght     get-hosttriplet
+set-alias -force gdp     get-depports
+set-alias -force ghdp    get-hostdepports
+set-alias -force ghp     get-hostports
+set-alias -force gpf     get-plannedfeatures
+set-alias -force uht     update-hosttools
+set-alias -force gpstamp get-packagestamps
+set-alias -force sbl     save-buildlogs
+set-alias -force cfsl    convertfrom-sftplisting
+set-alias -force tpn     test-publishneeded
+set-alias -force grp     get-remotepackages
+set-alias -force twr     test-wholerun
+set-alias -force gglp    get-gitlockpath
+set-alias -force tgl     test-gitlock
+set-alias -force gvt     get-vcpkgtrees
+set-alias -force gfs     get-freespace
+set-alias -force sfs     show-freespace
+set-alias -force gta     get-taskaction
+set-alias -force iv      invoke-vcpkg
+set-alias -force ig      invoke-git
+set-alias -force uco     update-checkout
+set-alias -force lkg     lock-git
+set-alias -force ulg     unlock-git
+
 export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,XP_SKIP_PORTS,QT_FEATURES,COMMON_QT_FEATURES,ANDROID_QT_FEATURES,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `
-		    -function setup_build_env,teardown_build_env,get-triplets,get_host_triplet,get_dep_ports,get_host_dep_ports,get_host_ports,planned_features,refresh_host_tools, `
-		              installed_package_stamps,archive_build_logs, `
-		              parse_sftp_listing,package_needs_publishing,remote_package_listing, `
-		              is_whole_run,git_lock_path,holds_git_lock,vcpkg_tree_paths, `
-		              free_space_gb,report_free_space, `
-		              task_action,vcpkg_run,git_run, `
-		              update_git_checkout,acquire_git_lock,release_git_lock `
-		    -alias vcpkg
+		    -function enter-buildenv,exit-buildenv,resolve-triplets,get-hosttriplet,get-depports,get-hostdepports,get-hostports,get-plannedfeatures,update-hosttools, `
+		              get-packagestamps,save-buildlogs, `
+		              convertfrom-sftplisting,test-publishneeded,get-remotepackages, `
+		              test-wholerun,get-gitlockpath,test-gitlock,get-vcpkgtrees, `
+		              get-freespace,show-freespace, `
+		              get-taskaction,invoke-vcpkg,invoke-git, `
+		              update-checkout,lock-git,unlock-git `
+		    -alias vcpkg,ebe,xbe,rt,ght,gdp,ghdp,ghp,gpf,uht,gpstamp,sbl,cfsl,tpn, `
+		           grp,twr,gglp,tgl,gvt,gfs,sfs,gta,iv,ig,uco,lkg,ulg

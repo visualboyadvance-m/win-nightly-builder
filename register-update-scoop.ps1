@@ -9,7 +9,7 @@ $trigger = new-scheduledtasktrigger -at $runat -daily
 
 if (-not (test-path $ROOT/logs)) { ni -it dir $ROOT/logs > $null }
 
-$action  = task_action -script update-scoop.ps1 -log update-scoop.log
+$action  = get-taskaction -script update-scoop.ps1 -log update-scoop.log
 
 $principal = new-scheduledtaskprincipal `
     -userid $env:USERNAME `

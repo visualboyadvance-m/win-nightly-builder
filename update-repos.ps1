@@ -2,7 +2,7 @@ import-module -force "$psscriptroot/vbam-builder.psm1"
 
 $erroractionpreference = 'stop'
 
-# Every checkout the builder works out of. update_git_checkout takes the lock
+# Every checkout the builder works out of. update-checkout takes the lock
 # that keeps this out of the way of a nightly or a manual run pulling the same
 # tree, skips anything not on a clean master, and reports what git said.
 #
@@ -21,13 +21,13 @@ $erroractionpreference = 'stop'
 # for.
 echo visualboyadvance-m vcpkg vcpkg-binpkg-prototype vcpkg-overlay win-nightly-builder windows-dev-guide | %{
     $path = "$REPOS_ROOT/$_"
-    $held = acquire_git_lock $path -timeout_seconds 0 -kind 'inuse'
+    $held = lock-git $path -timeout_seconds 0 -kind 'inuse'
 
     if (-not $held) {
         "Skipping $($_): a run is working out of it."
         return
     }
 
-    try     { update_git_checkout $path }
-    finally { release_git_lock $held }
+    try     { update-checkout $path }
+    finally { unlock-git $held }
 }

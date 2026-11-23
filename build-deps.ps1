@@ -3,40 +3,40 @@ import-module -force $psscriptroot/vbam-builder.psm1
 $erroractionpreference = 'stop'
 $progresspreference    = 'silentlycontinue'
 
-$build_triplets = get-triplets @args
+$build_triplets = resolve-triplets @args
 
 $repo_path = join-path $REPOS_ROOT visualboyadvance-m
 
-update_git_checkout $repo_path -submodules `
+update-checkout $repo_path -submodules `
     -origin git@github.com:visualboyadvance-m/visualboyadvance-m
 
 $host_tools_done = @{}
 
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
-        setup_build_env $triplet $tk
+        enter-buildenv $triplet $tk
 
         # Once per toolkit, ahead of the installs below, for the reason
-        # refresh_host_tools gives: the `--recurse` on the install is what lets
+        # update-hosttools gives: the `--recurse` on the install is what lets
         # a stale host tool take every triplet's copy of its dependents with
         # it, under this pass's single environment.
         if (-not $host_tools_done["$tk"]) {
             $host_tools_done["$tk"] = $true
 
-            # -WholeRun only when no triplet was named: see refresh_host_tools.
-            refresh_host_tools $build_triplets (get_host_triplet) $tk `
-                -WholeRun:(is_whole_run @($build_triplets | %{ "$_" }))
+            # -WholeRun only when no triplet was named: see update-hosttools.
+            update-hosttools $build_triplets (get-hosttriplet) $tk `
+                -WholeRun:(test-wholerun @($build_triplets | %{ "$_" }))
 
-            # refresh_host_tools leaves the environment on the host triplet.
-            setup_build_env $triplet $tk
+            # update-hosttools leaves the environment on the host triplet.
+            enter-buildenv $triplet $tk
         }
 
         # An Android triplet takes the cross list; GTK and the X11/Wayland
         # Vulkan loader the host list carries do not build for it.
-        $ports = get_dep_ports $triplet
+        $ports = get-depports $triplet
 
-        vcpkg_run --triplet $triplet install --no-binarycaching --recurse --keep-going $ports --allow-unsupported
-        vcpkg_run --triplet $triplet upgrade --no-binarycaching ($ports -replace '\[[^\]]+\]','') --no-dry-run --allow-unsupported
+        invoke-vcpkg --triplet $triplet install --no-binarycaching --recurse --keep-going $ports --allow-unsupported
+        invoke-vcpkg --triplet $triplet upgrade --no-binarycaching ($ports -replace '\[[^\]]+\]','') --no-dry-run --allow-unsupported
 
         $build_dir = join-path $repo_path build-$triplet
 
@@ -70,7 +70,7 @@ foreach ($triplet in $build_triplets) {
 # never hand it an empty list.
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
-        setup_build_env $triplet $tk
+        enter-buildenv $triplet $tk
 
         # Feature rows -- "bzip2[tool]:x86-mingw-static" -- carry no version, so
         # the digit in the pattern leaves them out and this stays port names.
@@ -78,11 +78,11 @@ foreach ($triplet in $build_triplets) {
                        %{ $_ -replace ':.*','' } | ?{ $_ } | select-object -unique)
 
         if ($installed) {
-            vcpkg_run --triplet $triplet upgrade --no-binarycaching --no-dry-run --allow-unsupported @installed
+            invoke-vcpkg --triplet $triplet upgrade --no-binarycaching --no-dry-run --allow-unsupported @installed
         }
     }
 }
 
-teardown_build_env
+exit-buildenv
 
 'Finished building and upgrading all dependencies and testing the build for all triplets, please check the log for any issues.'

@@ -31,7 +31,7 @@ $stage_dir  = "$stage_root/$PID"
 
 # $script:packages and $script:skip_packages wherever a function reads these,
 # the same rule vbam-builder.psm1's header sets out and for the sharper reason:
-# add_pack_unit takes a $packages of its own, and a function reads an
+# add-packunit takes a $packages of its own, and a function reads an
 # unqualified name out of the scope of whichever function called it. Read
 # these unqualified and the filters are one call away from being a pack unit's
 # package list rather than what the run was asked to build.
@@ -56,7 +56,7 @@ for ($i = 0; $i -lt $args.count; $i++) {
 
 $force_build = if ($filtered_args[0] -match '^--?f') { $true} else { $false }
 
-$build_triplets = get-triplets @filtered_args
+$build_triplets = resolve-triplets @filtered_args
 
 if ($packages) {
     $unknown = $packages | ?{ $_ -notin $ALL_DEP_PORT_NAMES }
@@ -72,8 +72,8 @@ if ($skip_packages) {
 # the build tooling in $HOST_DEP_PORTS for a triplet that can host a build --
 # glslang's compilers run on the builder, so only the host triplets get a copy.
 # The --packages/--skip-packages filters then apply to whichever list that is.
-function selected_ports([string]$triplet) {
-    $ports = @(get_dep_ports $triplet) + @(get_host_dep_ports $triplet)
+function get-selectedports([alias('t')][string]$triplet) {
+    $ports = @(get-depports $triplet) + @(get-hostdepports $triplet)
     if ($script:packages)      { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -in $script:packages } }
     if ($script:skip_packages) { $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $script:skip_packages } }
     @($ports)
@@ -87,15 +87,15 @@ function selected_ports([string]$triplet) {
 # x86-windows on Windows, whichever of them this builder itself runs on -- can
 # fetch its Qt tools instead of compiling them. No desktop build asks for any of
 # it, which is why a default run has to name them.
-function android_host_ports([string]$triplet) {
+function get-androidhostports([alias('t')][string]$triplet) {
     if ("$triplet" -notin $HOST_TRIPLETS) { return @() }
 
-    $ports = @(get_host_ports $ANDROID_TRIPLETS $triplet)
+    $ports = @(get-hostports $ANDROID_TRIPLETS $triplet)
 
     # A port the triplet's own list already names keeps that list's spec: its
     # features are the ones the emulator's CMakeLists asks for, and naming one
     # port twice with two feature sets only has vcpkg rebuild it back and forth.
-    $own   = @(@(get_dep_ports $triplet) + @(get_host_dep_ports $triplet)) -replace '\[[^\]]+\]',''
+    $own   = @(@(get-depports $triplet) + @(get-hostdepports $triplet)) -replace '\[[^\]]+\]',''
     $ports = $ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $own }
 
     # The same filters the triplet's own list gets: these are part of what a
@@ -131,40 +131,40 @@ function android_host_ports([string]$triplet) {
 #
 # Held back from the upgrades only. They are installed and packaged either way,
 # which is what a host that has never built them needs.
-function held_back_host_ports([string]$triplet, [string[]]$added) {
+function get-heldbackports([alias('t')][string]$triplet, [string[]]$added) {
     if (-not $added) { return @() }
 
     if (@(vcpkg-list | ?{ $_ -match ':[^\s]+-android(\s|$)' })) { return $added }
 
-    @(@(get_host_ports $ANDROID_TRIPLETS $triplet -Tools) -replace '\[[^\]]+\]','' | ?{ $_ -in $added })
+    @(@(get-hostports $ANDROID_TRIPLETS $triplet -Tools) -replace '\[[^\]]+\]','' | ?{ $_ -in $added })
 }
 
-$selected_port_names = @($build_triplets | %{ selected_ports $_ }) -replace '\[[^\]]+\]','' | select-object -unique
+$selected_port_names = @($build_triplets | %{ get-selectedports $_ }) -replace '\[[^\]]+\]','' | select-object -unique
 
 # Whether this run is going to rebuild everything, which decides whether the
 # shared host tooling may be refreshed. Refreshing one of those removes every
 # installed package that depends on it across every triplet, and only a run
 # building the lot puts them back; a run narrowed to a package or a triplet
 # would leave the rest deleted.
-$whole_run = is_whole_run @($build_triplets | %{ "$_" }) $packages $skip_packages
+$whole_run = test-wholerun @($build_triplets | %{ "$_" }) $packages $skip_packages
 
 
 "INFO: vcpkg packages upgrade started on $(date)."
-report_free_space $REPOS_ROOT
+show-freespace $REPOS_ROOT
 
 # set-content ends lines the way the platform does, so a Windows builder
 # rewriting a port file turns every line of it CRLF: the whole file reads as
 # changed, and the overlay ends up carrying both endings depending on which
 # builder got to the update first. Write LF whatever the platform, which is
 # what the overlay's files are.
-function set_content_lf([string]$path, [string[]]$lines) {
+function set-contentlf([string]$path, [string[]]$lines) {
     [io.file]::WriteAllText((convert-path $path), (($lines -join "`n") + "`n"))
 }
 
 # Replace the value in a `set(NAME value)` line, leaving the spacing that lines
 # the values up alone. By name, so the order the pins sit in does not matter and
 # nothing here has to count lines in the portfile.
-function set_cmake_var([string[]]$lines, [string]$name, [string]$value) {
+function set-cmakevar([string[]]$lines, [string]$name, [string]$value) {
     @($lines | %{
         $_ -replace ('^(\s*set\(' + [regex]::escape($name) + '\s+)\S+(\).*)$'),
                     ('${1}' + $value + '${2}')
@@ -177,7 +177,7 @@ function set_cmake_var([string[]]$lines, [string]$name, [string]$value) {
 # where it should be and the commit lives only in the tree. ls-remote cannot
 # read a tree, so this asks the API, which answers for a public repository
 # without a token.
-function wx_submodule_sha([string]$wx_sha, [string]$path) {
+function get-wxsubmodulesha([string]$wx_sha, [string]$path) {
     $url = "https://api.github.com/repos/wxWidgets/wxWidgets/contents/$path" + "?ref=$wx_sha"
 
     try {
@@ -225,7 +225,7 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
     #
     # ls-remote rather than the API for master: no token, no rate limit, and
     # git is already here. --heads keeps a tag of the same name out of it.
-    $wx_sha = @(git_run ls-remote --heads https://github.com/wxWidgets/wxWidgets.git master |
+    $wx_sha = @(invoke-git ls-remote --heads https://github.com/wxWidgets/wxWidgets.git master |
                 %{ ($_ -split '\s+')[0] } | ?{ $_ -match '^[0-9a-f]{40}$' })
 
     if ($lastexitcode -ne 0 -or -not $wx_sha) {
@@ -237,17 +237,17 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
     $overlay_dir = $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS })
 
     # Held for the pull, the commit and the push together rather than through
-    # update_git_checkout, which is one update and would let another run in
+    # update-checkout, which is one update and would let another run in
     # between this one reading the portfile and pushing its rewrite of it. The
     # --autostash is why this could not use it in any case: the whole point here
     # is a tree with a local edit in it.
-    $overlay_lock = acquire_git_lock $overlay_dir
+    $overlay_lock = lock-git $overlay_dir
 
     pushd $overlay_dir
 
     # Every builder runs this, so pick up whichever one got here first: the hash
     # check below then sees its commit and there is nothing left to do.
-    git_run pull --rebase --autostash
+    invoke-git pull --rebase --autostash
 
     if (-not ((gc wxwidgets/portfile.cmake) -match ("set\(WX_REF\s+" + $wx_sha))) {
         # Downloaded only once there is something to record. Most nights
@@ -257,8 +257,8 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
         # they were is the mismatch this pinning exists to stop, so a submodule
         # that cannot be resolved abandons the update and leaves the port at the
         # consistent set it already had.
-        $lexilla_sha   = wx_submodule_sha $wx_sha 'src/stc/lexilla'
-        $scintilla_sha = wx_submodule_sha $wx_sha 'src/stc/scintilla'
+        $lexilla_sha   = get-wxsubmodulesha $wx_sha 'src/stc/lexilla'
+        $scintilla_sha = get-wxsubmodulesha $wx_sha 'src/stc/scintilla'
 
         if (-not $lexilla_sha -or -not $scintilla_sha) {
             write-warning 'leaving the wxwidgets port at its current pins'
@@ -274,17 +274,17 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
         # scheduled tasks moved off pwsh. invoke-webrequest is the one spelling
         # both shells agree on. Absolute paths, since -outfile resolves against
         # the process directory and not the PowerShell one.
-        function fetch_sha512([string]$url, [string]$into) {
+        function get-sha512([string]$url, [string]$into) {
             iwr -usebasicparsing $url -outfile $into
 
             (get-filehash -a sha512 $into).hash.tolower()
         }
 
-        $new_wx_hash = fetch_sha512 `
+        $new_wx_hash = get-sha512 `
             "https://github.com/wxWidgets/wxWidgets/archive/$wx_sha.tar.gz" "$temp_dir/wx.tar.gz"
-        $new_lexilla_hash = fetch_sha512 `
+        $new_lexilla_hash = get-sha512 `
             "https://github.com/wxWidgets/lexilla/archive/$lexilla_sha.tar.gz" "$temp_dir/lexilla.tar.gz"
-        $new_scintilla_hash = fetch_sha512 `
+        $new_scintilla_hash = get-sha512 `
             "https://github.com/wxWidgets/scintilla/archive/$scintilla_sha.tar.gz" "$temp_dir/scintilla.tar.gz"
 
         ri -r -fo $temp_dir
@@ -302,10 +302,10 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
             @{ Name = 'SCINTILLA_REF';    Value = $scintilla_sha },
             @{ Name = 'SCINTILLA_SHA512'; Value = $new_scintilla_hash })) {
 
-            $wx_portfile = set_cmake_var $wx_portfile $pin.Name $pin.Value
+            $wx_portfile = set-cmakevar $wx_portfile $pin.Name $pin.Value
         }
 
-        set_content_lf wxwidgets/portfile.cmake $wx_portfile
+        set-contentlf wxwidgets/portfile.cmake $wx_portfile
 
         # Read at the pinned commit, not at master, or the version recorded
         # here can be one from a commit the port does not build.
@@ -314,7 +314,7 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
             sls '.*wxVERSION_STRING\D+([\d.]+).*' | select -first 1
         ).matches.groups[1].value
 
-        set_content_lf wxwidgets/vcpkg.json `
+        set-contentlf wxwidgets/vcpkg.json `
             @(gc wxwidgets/vcpkg.json | %{
                 $(if ($_ -match '^(  "version": ")([^-]+)-(\d+)(".*)') {
                     $matches.1 + $wx_master_ver + '-' +
@@ -323,7 +323,7 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
                     $matches.4 } `
                 else { $_ }) })
 
-        git_run commit -a -m "wxwidgets: update master commit + bump ver" --signoff
+        invoke-git commit -a -m "wxwidgets: update master commit + bump ver" --signoff
 
         if ($lastexitcode -ne 0) {
             write-error 'failed to commit the wxwidgets port update in the overlay'
@@ -335,12 +335,12 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
             $pushed = $false
 
             foreach ($try in 1..3) {
-                git_run push
+                invoke-git push
 
                 if ($lastexitcode -eq 0) { $pushed = $true; break }
 
                 "INFO: push rejected, rebasing onto the remote and retrying ($try)."
-                git_run pull --rebase --autostash
+                invoke-git pull --rebase --autostash
             }
 
             if (-not $pushed) {
@@ -352,7 +352,7 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
 
     popd
 
-    release_git_lock $overlay_lock
+    unlock-git $overlay_lock
 }
 
 # Every upgrade in this script goes through here so that none of them can go
@@ -364,12 +364,12 @@ if (-not $disable_wx_update -and 'wxwidgets' -in $selected_port_names) {
 # uninstalled rather than merely stale. PowerShell drops an empty string
 # argument to a native command instead of passing it, so one blank entry in a
 # port list is all it would take to get there.
-function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
+function update-port([alias('t')][string]$triplet, [alias('ht')][string]$host_triplet, [string]$port) {
     if (-not $port) {
         write-error "refusing to run 'vcpkg upgrade' with no port named (triplet $triplet)"
     }
 
-    vcpkg_run --triplet $triplet --host-triplet $host_triplet upgrade `
+    invoke-vcpkg --triplet $triplet --host-triplet $host_triplet upgrade `
         --no-binarycaching --allow-unsupported --no-dry-run --keep-going $port
 }
 
@@ -391,12 +391,12 @@ function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
 # it -- sdl3[vulkan,libusb] -- means "the defaults and these as well", which
 # cannot be told apart from a set vcpkg has widened.
 #
-# The known set is the one vcpkg plans for the triplet, from planned_features,
+# The known set is the one vcpkg plans for the triplet, from get-plannedfeatures,
 # and not the spec itself. A port's features pull in other features of the same
 # port, so what a correct install puts on disk is the closure of the spec
 # rather than the spec -- and held to the spec, qtbase came out widened on
 # every triplet of every run, was removed and rebuilt, and came back the same.
-# planned_features has the whole story.
+# get-plannedfeatures has the whole story.
 #
 # What is checked against it is the extras alone. A feature the plan asks for
 # and the tree has not got needs no remove: vcpkg adds one to an installed
@@ -438,7 +438,7 @@ function upgrade_port([string]$triplet, [string]$host_triplet, [string]$port) {
 # core is always in it. These specs are used to reinstall exactly what was
 # there, and a bare name asks for the port's default features instead -- which
 # is the widening this whole pass exists to undo.
-function installed_specs([string[]]$listing) {
+function get-installedspecs([string[]]$listing) {
     $names = @{}
     $feats = @{}
 
@@ -463,19 +463,19 @@ function installed_specs([string[]]$listing) {
     $specs
 }
 
-function enforce_core_features([string]$triplet, [string]$host_triplet, [string[]]$wanted,
+function repair-corefeatures([alias('t')][string]$triplet, [alias('ht')][string]$host_triplet, [string[]]$wanted,
                                [System.Collections.Generic.List[string]]$unrepaired,
                                [System.Collections.Generic.List[string]]$rebuilt) {
-    $specs = @(get_dep_ports $triplet) + @(get_host_dep_ports $triplet) | ?{ $_ -match '\[' }
+    $specs = @(get-depports $triplet) + @(get-hostdepports $triplet) | ?{ $_ -match '\[' }
     $specs = @($specs | ?{ ($_ -split '[\[\],]') -contains 'core' })
 
     if (-not $specs) { return }
 
     # What each of those ports is to be measured against: the feature set vcpkg
     # works out for this triplet, not the one the list above names. They are
-    # different sets and neither is wrong -- see planned_features, which is
+    # different sets and neither is wrong -- see get-plannedfeatures, which is
     # also where the cost of getting this backwards is written down.
-    $planned = planned_features $triplet $host_triplet
+    $planned = get-plannedfeatures $triplet $host_triplet
 
     # No plan is no grounds for removing anything. vcpkg has already said why
     # in a warning of its own; narrowing a feature set on a guess would remove
@@ -551,9 +551,9 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
         # whatever vcpkg actually took, however deep the closure ran and
         # whichever triplets it ran through.
         $qualified = "${name}:$triplet"
-        $before    = installed_specs $listing
+        $before    = get-installedspecs $listing
 
-        vcpkg_run --triplet $triplet --host-triplet $host_triplet remove --recurse $name
+        invoke-vcpkg --triplet $triplet --host-triplet $host_triplet remove --recurse $name
 
         if ($LASTEXITCODE -ne 0) {
             write-warning "${qualified}: vcpkg remove exited $LASTEXITCODE; leaving it unpublished"
@@ -561,7 +561,7 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
             continue
         }
 
-        $after   = installed_specs @(vcpkg-list)
+        $after   = get-installedspecs @(vcpkg-list)
         $removed = @($before.keys | ?{ ($_ -ne $qualified) -and (-not $after.contains($_)) } | sort-object)
 
         if ($removed) {
@@ -573,7 +573,7 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
         # carries no triplet of its own and --triplet takes one.
         #
         # The host triplet goes first where the removal reached it, for the
-        # reason get-triplets orders a run that way: a cross target installed
+        # reason resolve-triplets orders a run that way: a cross target installed
         # first pulls its host dependency in on its own, and vcpkg gives a host
         # dependency the port's default features -- the widening this pass
         # exists to undo, reintroduced by the repair for it.
@@ -590,7 +590,7 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
         foreach ($t in $order) {
             $t_specs = @($restore[$t])
 
-            vcpkg_run --triplet $t --host-triplet $host_triplet install `
+            invoke-vcpkg --triplet $t --host-triplet $host_triplet install `
                 --no-binarycaching --allow-unsupported --recurse --keep-going @t_specs
 
             if ($LASTEXITCODE -ne 0) {
@@ -599,7 +599,7 @@ function enforce_core_features([string]$triplet, [string]$host_triplet, [string[
         }
 
         $final_listing = @(vcpkg-list)
-        $final         = installed_specs $final_listing
+        $final         = get-installedspecs $final_listing
         $restored      = @(@($qualified) + $removed)
         $missing       = @($restored | ?{ -not $final.contains($_) })
 
@@ -655,10 +655,10 @@ pushd $stage_dir
 # pack unit says both at once: a pair with packages in it is a pair with a
 # directory to put.
 $pack_units         = [ordered]@{}
-# Toolkits refresh_host_tools has already run for.
+# Toolkits update-hosttools has already run for.
 $host_tools_done    = @{}
 # When each toolkit's tree last had every package written, read once at packing
-# time and compared against the server. See installed_package_stamps.
+# time and compared against the server. See get-packagestamps.
 $stamps             = @{}
 # Packages the server already has the current build of.
 $unchanged_count    = 0
@@ -671,7 +671,7 @@ $build_failures     = @()
 
 # Record packages against the triplet and toolkit they were built for, for the
 # one packing pass further down to work through.
-function add_pack_unit([string]$triplet, [string]$toolkit, [string[]]$packages) {
+function add-packunit([alias('t')][string]$triplet, [alias('tk')][string]$toolkit, [string[]]$packages) {
     if (-not $packages) { return }
 
     $key = "$triplet|$toolkit"
@@ -693,7 +693,7 @@ function add_pack_unit([string]$triplet, [string]$toolkit, [string[]]$packages) 
 #
 # That task pulls every checkout hourly, and a pull landing mid-run moves the
 # ports underneath the build: the host tools live in this tree, so one going
-# out of date at 22:00 is one refresh_host_tools looked at and passed at 21:00,
+# out of date at 22:00 is one update-hosttools looked at and passed at 21:00,
 # and the next install that wants it drags every dependent across every triplet
 # into a single plan under whichever environment that pass has. update-repos
 # asks for this lock without waiting and skips the checkout when a run has it.
@@ -702,7 +702,7 @@ function add_pack_unit([string]$triplet, [string]$toolkit, [string[]]$packages) 
 # not removing a package out of installed/ while that one links against it.
 # That wants every tree this installs into rather than the default checkout
 # alone -- a v143 pass installs into vcpkg-v143 -- so take the set, in the
-# order vcpkg_tree_paths gives it, the same order the nightly asks in.
+# order get-vcpkgtrees gives it, the same order the nightly asks in.
 #
 # Only vcpkg's own trees. The overlay is pulled hourly too and moving it mid-run
 # is its own kind of wrong -- half the triplets built against one version of a
@@ -712,21 +712,21 @@ function add_pack_unit([string]$triplet, [string]$toolkit, [string[]]$packages) 
 # Released after the packing pass below. Not in a finally: Windows closes an
 # exclusively opened file when the process holding it goes, so a run that dies
 # releases it on the way out, which is the case that matters.
-$vcpkg_tree_locks = @(vcpkg_tree_paths | %{
-    [PSCustomObject]@{ Path = $_; Lock = acquire_git_lock $_ -timeout_seconds 0 -kind 'inuse' }
+$vcpkg_tree_locks = @(get-vcpkgtrees | %{
+    [PSCustomObject]@{ Path = $_; Lock = lock-git $_ -timeout_seconds 0 -kind 'inuse' }
 })
 
 foreach ($held in @($vcpkg_tree_locks | ?{ -not $_.Lock })) {
     write-warning ("another run is building out of $($held.Path). This one builds against the tree " +
-                   "as it stands and will not update it, and update_vcpkg says the same.")
+                   "as it stands and will not update it, and update-vcpkg says the same.")
 }
 
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
-        setup_build_env $triplet $tk
+        enter-buildenv $triplet $tk
 
         if (-not $binpkg_module) { $binpkg_module = (get-module vcpkg-binpkg).path }
-        $host_t = get_host_triplet
+        $host_t = get-hosttriplet
 
         # Once per toolkit, before the first install of that toolkit's tree:
         # the tooling is shared by every triplet in it, so whichever pass comes
@@ -734,13 +734,13 @@ foreach ($triplet in $build_triplets) {
         if (-not $host_tools_done["$tk"]) {
             $host_tools_done["$tk"] = $true
 
-            refresh_host_tools $build_triplets $host_t $tk -WholeRun:$whole_run
+            update-hosttools $build_triplets $host_t $tk -WholeRun:$whole_run
 
-            # refresh_host_tools leaves the environment on the host triplet.
-            setup_build_env $triplet $tk
+            # update-hosttools leaves the environment on the host triplet.
+            enter-buildenv $triplet $tk
         }
 
-        $build_ports = @(selected_ports $triplet)
+        $build_ports = @(get-selectedports $triplet)
 
         # The default toolkit only. What these packages provide is build tools
         # -- moc, rcc, androiddeployqt -- that nothing links against, so which
@@ -748,9 +748,9 @@ foreach ($triplet in $build_triplets) {
         # copy under v143 would only be another Qt build.
         #
         # Inside the toolkit loop even so: the set comes out of a vcpkg install
-        # plan, and setup_build_env has just pointed VCPKG_ROOT at the tree
+        # plan, and enter-buildenv has just pointed VCPKG_ROOT at the tree
         # that plan should be read from.
-        $android_host = @(if (-not $tk) { android_host_ports $triplet })
+        $android_host = @(if (-not $tk) { get-androidhostports $triplet })
 
         if ($android_host) {
             "Adding the Android host deps to ${triplet}: $($android_host -join ', ')"
@@ -762,7 +762,7 @@ foreach ($triplet in $build_triplets) {
         # Some of what that added is built and packaged but not upgraded by
         # name; see above. Only what it added -- a port the triplet's own list
         # names is upgraded by name as it always was.
-        $held_back          = @(held_back_host_ports $triplet @($android_host -replace '\[[^\]]+\]',''))
+        $held_back          = @(get-heldbackports $triplet @($android_host -replace '\[[^\]]+\]',''))
         $upgrade_port_names = @($build_port_names | ?{ $_ -notin $held_back })
 
         # vcpkg install treats a dependency as satisfied when a package of that
@@ -783,7 +783,7 @@ foreach ($triplet in $build_triplets) {
             $host_installed = @(vcpkg-list | ?{ $_ -match (":$host_t" + '\s+\d') } | %{ $_ -replace ':.*','' })
 
             foreach ($port in @($build_port_names | ?{ $_ -in $host_installed })) {
-                upgrade_port $host_t $host_t $port
+                update-port $host_t $host_t $port
             }
         }
 
@@ -801,7 +801,7 @@ foreach ($triplet in $build_triplets) {
         # port in the list installs against the copy it is going to keep, and
         # $DEP_PORTS is ordered so a port's dependencies come before it.
         foreach ($port in $build_ports) {
-            vcpkg_run --triplet $triplet --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $port
+            invoke-vcpkg --triplet $triplet --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $port
 
             # vcpkg's own exit status, which nothing here used to read.
             #
@@ -825,7 +825,7 @@ foreach ($triplet in $build_triplets) {
             }
 
             if ($port_name -in $upgrade_port_names) {
-                upgrade_port $triplet $host_t $port_name
+                update-port $triplet $host_t $port_name
 
                 if ($LASTEXITCODE -ne 0) {
                     $failed_ports[$port_name] = $true
@@ -855,7 +855,7 @@ foreach ($triplet in $build_triplets) {
             $build_failures += "${failed}:$triplet$(if ($tk) { " ($tk)" })"
 
             # Before the next run builds that pair and writes over them.
-            archive_build_logs $failed "$triplet" $tk
+            save-buildlogs $failed "$triplet" $tk
         }
 
         # Everything installed for the pair, not only the ports this run was
@@ -880,7 +880,7 @@ foreach ($triplet in $build_triplets) {
         #
         # A port whose build failed is not packaged from whatever copy of it
         # happens to be left in the tree, however well that copy lists.
-        add_pack_unit "$triplet" $tk @($installed_names | ?{ -not $failed_ports.contains($_) })
+        add-packunit "$triplet" $tk @($installed_names | ?{ -not $failed_ports.contains($_) })
 
         # For cross-compiling triplets, build the host-tool dependencies for
         # the target architecture's native host triplet (e.g. arm64-windows for
@@ -956,25 +956,25 @@ foreach ($triplet in $build_triplets) {
             # that names it, and the build compiles Qt from source for both.
             # Those arrived as dependencies of the direct host deps and were
             # never published, since only the direct set was packaged.
-            $host_ports      = @(get_host_ports $triplet $target_host_t)
+            $host_ports      = @(get-hostports $triplet $target_host_t)
             $host_port_names = @($host_ports -replace '\[[^\]]+\]','')
             # Built and packaged, never upgraded by name, for the reason the
             # Android host halves above are not.
-            $th_tools        = @(get_host_ports $triplet $target_host_t -Tools) -replace '\[[^\]]+\]',''
+            $th_tools        = @(get-hostports $triplet $target_host_t -Tools) -replace '\[[^\]]+\]',''
 
             if ($host_ports) {
                 "Building host deps for $target_host_t$(if ($tk) { " ($tk)" }) (cross target: $triplet): $($host_ports -join ', ')"
 
-                setup_build_env $target_host_t $tk
+                enter-buildenv $target_host_t $tk
 
                 # Interleaved for the reason the target ports above are.
                 foreach ($dep in $host_ports) {
-                    vcpkg_run --triplet $target_host_t --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
+                    invoke-vcpkg --triplet $target_host_t --host-triplet $host_t install --no-binarycaching --allow-unsupported --recurse --keep-going $dep
 
                     $dep_name = $dep -replace '\[[^\]]+\]',''
 
                     if ($dep_name -notin $th_tools) {
-                        upgrade_port $target_host_t $host_t $dep_name
+                        update-port $target_host_t $host_t $dep_name
                     }
                 }
 
@@ -986,10 +986,10 @@ foreach ($triplet in $build_triplets) {
                     $build_failures += "${missing}:$target_host_t$(if ($tk) { " ($tk)" })"
                     write-warning "${missing}:$target_host_t did not build, nothing to package"
 
-                    archive_build_logs $missing "$target_host_t" $tk
+                    save-buildlogs $missing "$target_host_t" $tk
                 }
 
-                add_pack_unit $target_host_t $tk @($th_installed | ?{ $_ -in $host_port_names })
+                add-packunit $target_host_t $tk @($th_installed | ?{ $_ -in $host_port_names })
             }
         }
     }
@@ -1011,11 +1011,11 @@ $unrepaired = [System.Collections.Generic.List[string]]::new()
 $rebuilt    = [System.Collections.Generic.List[string]]::new()
 
 foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
-    setup_build_env $unit.Triplet $unit.Toolkit
+    enter-buildenv $unit.Triplet $unit.Toolkit
 
     $before_count = $unrepaired.Count
 
-    enforce_core_features $unit.Triplet $host_t @($unit.Packages) $unrepaired $rebuilt
+    repair-corefeatures $unit.Triplet $host_t @($unit.Packages) $unrepaired $rebuilt
 
     # Reported against the unit that was being repaired, since that is the
     # toolkit the failure happened under; the entries themselves stay bare
@@ -1041,13 +1041,13 @@ if ($rebuilt.Count) {
 # Sequential over pairs and parallel within one, not both: vcpkg-mkpkg reads
 # the tree VCPKG_ROOT names, that is a single process-wide variable, and thread
 # jobs share the process, so two pairs cannot be in flight together. Ordered by
-# toolkit so setup_build_env is moved between the two trees no more than it has
+# toolkit so enter-buildenv is moved between the two trees no more than it has
 # to be.
 foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
     $unit_triplet = $unit.Triplet
     $unit_tk      = $unit.Toolkit
 
-    setup_build_env $unit_triplet $unit_tk
+    enter-buildenv $unit_triplet $unit_tk
 
     # What the repair pass could not put right, for this triplet, by bare name:
     # a package missing from the tree is one there is nothing to pack.
@@ -1086,7 +1086,7 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
     # older versions before putting the new one and wants these same names to
     # do it. Reusing it there is also what keeps this to one connection a pair
     # rather than two.
-    $remote = remote_package_listing "vcpkg/$(if ($unit_tk) { "$unit_triplet/$unit_tk" } else { $unit_triplet })"
+    $remote = get-remotepackages "vcpkg/$(if ($unit_tk) { "$unit_triplet/$unit_tk" } else { $unit_triplet })"
 
     $unit | add-member -notepropertyname Remote -notepropertyvalue $remote -force
 
@@ -1098,7 +1098,7 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
         # the server, reported as "already published and unchanged". Every
         # repair is through before this loop starts now, so whatever it reads
         # is current for the whole pass.
-        if (-not $stamps.contains("$unit_tk")) { $stamps["$unit_tk"] = installed_package_stamps }
+        if (-not $stamps.contains("$unit_tk")) { $stamps["$unit_tk"] = get-packagestamps }
 
         $built  = $stamps["$unit_tk"]
         $stale  = @()
@@ -1114,7 +1114,7 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
                         [datetime]::new([long]$built[$key], [datetimekind]::Utc).ToLocalTime()
                     } else { get-date }
 
-            if (package_needs_publishing $remote $pkg $when) { $fresh += $pkg } else { $stale += $pkg }
+            if (test-publishneeded $remote $pkg $when) { $fresh += $pkg } else { $stale += $pkg }
         }
 
         if ($stale) {
@@ -1166,12 +1166,12 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
     } | receive-job -wait -autoremovejob
 }
 
-teardown_build_env
+exit-buildenv
 
 # The builds are done and the packages are made, so the ports tree is nobody's
 # business now: let the hourly update have it back before the uploads, which
 # take a while and do not touch it.
-$vcpkg_tree_locks | %{ release_git_lock $_.Lock }
+$vcpkg_tree_locks | %{ unlock-git $_.Lock }
 
 # Packages sftp could not put, filled in by the upload jobs below.
 $upload_failures = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
@@ -1237,7 +1237,7 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
     # The names the packing pass read off the server, so the put below can
     # clear the older versions of each first.
     #
-    # parse_sftp_listing matches package names out of the listing rather than
+    # convertfrom-sftplisting matches package names out of the listing rather than
     # skipping a fixed number of header lines, which is what the counting it
     # replaced got wrong: sftp writes two header lines with stderr discarded
     # and not three, so skipping three ate the alphabetically first package in
@@ -1266,7 +1266,7 @@ foreach ($unit in @($pack_units.values | sort-object Toolkit, Triplet)) {
             # sftp reads this batch a line at a time, so write LF
             # whatever the builder: add-content ends lines the platform's
             # way, and a CR riding along on a put becomes part of the
-            # remote file name. set_content_lf lives in the script scope,
+            # remote file name. set-contentlf lives in the script scope,
             # which a thread job's runspace does not see, so write inline.
             $batch = new-temporaryfile
             $batch_lines = @()

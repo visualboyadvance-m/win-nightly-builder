@@ -3,7 +3,7 @@ import-module -force $psscriptroot/vbam-builder.psm1
 $erroractionpreference = 'stop'
 $progresspreference    = 'silentlycontinue'
 
-$build_triplets = get-triplets @args
+$build_triplets = resolve-triplets @args
 
 $repo_path = join-path $REPOS_ROOT visualboyadvance-m
 
@@ -24,7 +24,7 @@ popd
 
 foreach ($triplet in $build_triplets) {
     foreach ($tk in $triplet.toolkits) {
-        setup_build_env $triplet $tk
+        enter-buildenv $triplet $tk
 
         $build_dir = join-path $repo_path build-$triplet
 
@@ -39,6 +39,6 @@ foreach ($triplet in $build_triplets) {
     }
 }
 
-teardown_build_env
+exit-buildenv
 
 'Finished downloading all dependencies, please check the log for any issues.'

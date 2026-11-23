@@ -35,14 +35,14 @@ if (-not (get-module -listavailable pester | ?{ $_.version -ge [version]'5.0' })
         'install-module pester -scope currentuser -force')
 }
 
-function quote($str) { "'" + ($str -replace "'","''") + "'" }
+function convertto-quoted($str) { "'" + ($str -replace "'","''") + "'" }
 
 $command = @(
     '$c = new-pesterconfiguration'
-    '$c.run.path = '        + (($files | %{ quote $_ }) -join ',')
+    '$c.run.path = '        + (($files | %{ convertto-quoted $_ }) -join ',')
     '$c.run.passthru = $true'
-    '$c.output.verbosity = ' + (quote $output)
-    if ($filter) { '$c.filter.fullname = ' + (quote $filter) }
+    '$c.output.verbosity = ' + (convertto-quoted $output)
+    if ($filter) { '$c.filter.fullname = ' + (convertto-quoted $filter) }
     'exit (invoke-pester -configuration $c).failedcount'
 ) -join '; '
 
