@@ -20,6 +20,15 @@ if (-not (test-path variable:global:iswindows)) {
     }
 }
 
+# Every variable at this scope is read as $script:NAME from the functions
+# below, never as $NAME. Variable names are case insensitive, and a function
+# of this module's reads an unqualified name out of the scope of whichever of
+# its own functions called it, so a $triplets or a $dep_ports held anywhere
+# down that chain is what such a read gives back in place of the module's own.
+# A caller outside the module cannot do it -- a module has a session state of
+# its own -- and no parameter here is named after one of these any more, the
+# two that were being $run_triplets and $for_triplets now. The qualification
+# is the half of it that a later parameter name cannot undo.
 $ROOT           = $(if ($iswindows) { if ((hostname) -match '^win[-_]?builder') { '' } else { $env:USERPROFILE } } else { $env:HOME })
 
 $REPOS_ROOT     = $ROOT + '/source/repos'
@@ -244,15 +253,6 @@ $HOST_DEP_PORT_NAMES = $HOST_DEP_PORTS -replace '\[[^\]]+\]',''
 $ALL_DEP_PORT_NAMES = @($DEP_PORT_NAMES) + @($ANDROID_DEP_PORT_NAMES) + @($HOST_DEP_PORT_NAMES) |
                       select-object -unique
 
-# A function here reads one of these lists as $script:TRIPLETS, never as
-# $TRIPLETS. Variable names are case insensitive, and a function of this
-# module's reads an unqualified name out of the scope of whichever of its
-# functions called it, so a $triplets held anywhere down that chain is what
-# such a read gives back in place of the platform's list. A caller outside the
-# module cannot do it -- a module has a session state of its own -- and
-# nothing here takes a parameter by that name any more: the two that did are
-# $run_triplets and $for_triplets now. The qualification is the half of it
-# that a later parameter name cannot undo.
 $TRIPLETS       = if ($iswindows) {
 		      'x86-mingw-static','x64-mingw-static',(echo x64 x86 arm64 | %{ "$_-windows" } | %{ $_,"$_-static" }) | echo
 		  } elseif ($islinux) {
@@ -458,11 +458,11 @@ if ($iswindows) {
 
                         $added = $prev_additions['PATH']
 
-                        $env:Path = (($env:Path -split $path_sep |
+                        $env:Path = (($env:Path -split $script:path_sep |
                             %{ $_.trim() } | ?{
                                 $_ -and $_ -inotmatch $vs_strip_re -and
                                     -not $added[$_.trimend('/\')]
-                            }) -join $path_sep)
+                            }) -join $script:path_sep)
                     }
                     elseif ($null -ne $_.value) {
                         set-item -literalpath "env:$($_.key)" $_.value
@@ -491,34 +491,34 @@ if ($iswindows) {
             $vcpkg_root_trimmed = if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT.trimend('/\') } else { $null }
             if ($script:vsenv_vcpkg_in_path -and $vcpkg_root_trimmed -and
                 $script:vsenv_vcpkg_in_path -ine $vcpkg_root_trimmed) {
-                $env:Path = ($env:Path -split $path_sep | ?{
+                $env:Path = ($env:Path -split $script:path_sep | ?{
                     $_.trim().trimend('/\') -ine $script:vsenv_vcpkg_in_path
-                }) -join $path_sep
+                }) -join $script:path_sep
             }
 
             # PATH baseline: strip VS-adjacent entries, normalize and dedup.
             $post_unload_dedup = @{}
-            $post_unload_path = ($env:Path -split $path_sep | %{ $_.trim().trimend('/\') } | ?{
+            $post_unload_path = ($env:Path -split $script:path_sep | %{ $_.trim().trimend('/\') } | ?{
                 $_ -and $_ -inotmatch $vs_strip_re -and -not $post_unload_dedup[$_] -and ($post_unload_dedup[$_] = $true)
-            }) -join $path_sep
+            }) -join $script:path_sep
 
             # Ensure VCPKG_ROOT is in the baseline so -unload preserves it.
             if ($vcpkg_root_trimmed -and -not $post_unload_dedup[$vcpkg_root_trimmed]) {
-                $post_unload_path += $path_sep + $vcpkg_root_trimmed
+                $post_unload_path += $script:path_sep + $vcpkg_root_trimmed
             }
             $script:vsenv_vcpkg_in_path = $vcpkg_root_trimmed
 
-            if (-not $arch) { $arch = $default_arch }
+            if (-not $arch) { $arch = $script:default_arch }
 
             # Normalize x64/amd64 synonyms before comparing to default_arch.
             $canon_arch = if ($arch -ieq 'x64') { 'amd64' }
                           elseif ($arch -ieq 'amd64') { 'x64' }
                           else { $arch }
 
-            $vcvars_args = @($(if ($canon_arch -ieq $default_arch -or $arch -ieq $default_arch) {
+            $vcvars_args = @($(if ($canon_arch -ieq $script:default_arch -or $arch -ieq $script:default_arch) {
                 $arch
             } else {
-                "${default_arch}_${arch}"
+                "${script:default_arch}_${arch}"
             }))
 
             if ($toolkit) {
@@ -531,7 +531,7 @@ if ($iswindows) {
                     $tk_gen   = [int]$matches[2]  # 3 for v143
                     $lower = $tk_gen * 10       # v143 → 30
                     $upper = $tk_gen * 10 + 20  # v143 → 50 (exclusive)
-                    $msvc_base = (resolve-path (join-path (split-path $vcvarsall.path -parent) '../../Tools/MSVC') -ea ignore).path
+                    $msvc_base = (resolve-path (join-path (split-path $script:vcvarsall.path -parent) '../../Tools/MSVC') -ea ignore).path
                     $best = if ($msvc_base) {
                         get-childitem $msvc_base -directory |
                             ?{ $_.name -match '^(\d+)\.(\d+)\.' -and
@@ -549,10 +549,10 @@ if ($iswindows) {
 
             $list_vars | ?{ $_ -ine 'PATH' } | %{ remove-item -literalpath "env:$_" -ea ignore }
 
-            $vcvars_cmd = "$vcvarsall $($vcvars_args -join ' ')"
+            $vcvars_cmd = "$script:vcvarsall $($vcvars_args -join ' ')"
             write-verbose "vsenv: $vcvars_cmd"
 
-            $output = cmd /c "`"$vcvarsall`" $($vcvars_args -join ' ') && set" 2>&1
+            $output = cmd /c "`"$script:vcvarsall`" $($vcvars_args -join ' ') && set" 2>&1
 
             if ($lastexitcode) {
                 write-error "vcvarsall.bat failed with exit code $lastexitcode" -ea stop
@@ -574,10 +574,10 @@ if ($iswindows) {
                 $val = $pre_unload[$lv]
                 $saved_lists[$lv] = if ($val -and $prev_additions -and $prev_additions[$lv]) {
                     $added = $prev_additions[$lv]
-                    $clean = $val -split $path_sep | %{ $_.trim().trimend('/\') } | ?{
+                    $clean = $val -split $script:path_sep | %{ $_.trim().trimend('/\') } | ?{
                         $_ -and -not $added[$_]
                     }
-                    if ($clean) { $clean -join $path_sep }
+                    if ($clean) { $clean -join $script:path_sep }
                 } else {
                     $val
                 }
@@ -592,12 +592,12 @@ if ($iswindows) {
                 foreach ($lv in @('LIB', 'INCLUDE')) {
                     $val = $saved_lists[$lv]
                     if (-not $val) { continue }
-                    $saved_lists[$lv] = ($val -split $path_sep | %{
+                    $saved_lists[$lv] = ($val -split $script:path_sep | %{
                         $e = $_ -replace '[/\\]+', '\'
                         if ($e -imatch "^${vcpkg_root_re}\\installed\\[^\\]+-windows(-static)?\\(lib|include)$") {
                             "$env:VCPKG_ROOT/installed/${vcpkg_arch}-windows$($matches[1])/$($matches[2])"
                         } else { $_ }
-                    }) -join $path_sep
+                    }) -join $script:path_sep
                 }
             }
 
@@ -616,7 +616,7 @@ if ($iswindows) {
                     # the next call can subtract these arch-specific entries from pre_unload.
                     if ($name -ine 'PATH') {
                         $vc_set = @{}
-                        $value -split $path_sep | %{
+                        $value -split $script:path_sep | %{
                             $n = ($_ -replace '[/\\]{2,}', '\').trim().trimend('\')
                             if ($n) { $vc_set[$n] = $true }
                         }
@@ -626,7 +626,7 @@ if ($iswindows) {
                     $saved = $state.saved_lists[$name]
                     # saved is the user baseline; split into entries for merging.
                     # Strip VS/SDK/WinKits/.NET paths that may have leaked in.
-                    $saved_entries = @($saved -split $path_sep | %{ $_.trim().trimend('/\') } | ?{
+                    $saved_entries = @($saved -split $script:path_sep | %{ $_.trim().trimend('/\') } | ?{
                         $_ -and $_ -inotmatch $vs_strip_re
                     })
                     # Build a set of all saved entry identities: both resolved path and
@@ -638,7 +638,7 @@ if ($iswindows) {
                         if ($rp) { $seen[$rp.trim().trimend('/\')] = $true }
                         $seen[$_] = $true
                     }
-                    $new_entries = @($value -split $path_sep | %{ ($_ -replace '[/\\]{2,}', '\').trim().trimend('/\') } | ?{
+                    $new_entries = @($value -split $script:path_sep | %{ ($_ -replace '[/\\]{2,}', '\').trim().trimend('/\') } | ?{
                         if (-not $_) { return $false }
                         $rp    = (resolve-path $_ -ea ignore).path
                         $check = if ($rp) { $rp.trim().trimend('/\') } else { $_ }
@@ -672,7 +672,7 @@ if ($iswindows) {
                     $dedup_seen = @{}
                     $all_entries = @($all_entries | ?{ -not $dedup_seen[$_] -and ($dedup_seen[$_] = $true) })
                     if ($all_entries) {
-                        set-item -literalpath "env:$name" ($all_entries -join $path_sep)
+                        set-item -literalpath "env:$name" ($all_entries -join $script:path_sep)
                     }
                 }
                 elseif ($name -like '__VSCMD_PREINIT_*') {
@@ -827,9 +827,9 @@ function acquire_git_lock([string]$path, [int]$timeout_seconds = 1800, [string]$
 # Always in the same order, so two runs asking for the whole set take them in
 # the same sequence and cannot each end up holding what the other waits for.
 function vcpkg_tree_paths() {
-    $root = join-path $REPOS_ROOT vcpkg
+    $root = join-path $script:REPOS_ROOT vcpkg
 
-    @($root) + @($TOOLKITS | ?{ $_ } | sort-object | %{ "$root-$_" })
+    @($root) + @($script:TOOLKITS | ?{ $_ } | sort-object | %{ "$root-$_" })
 }
 
 # Below this many gigabytes free, a run says so before it starts.
@@ -880,8 +880,8 @@ function report_free_space([string]$path) {
 
     "INFO: $free GB free on $([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($path)))"
 
-    if ($free -lt $LOW_DISK_GB) {
-	write-warning ("only $free GB free, under the $LOW_DISK_GB GB this expects to " +
+    if ($free -lt $script:LOW_DISK_GB) {
+	write-warning ("only $free GB free, under the $script:LOW_DISK_GB GB this expects to " +
 		       "have room to work in; a run that fills the disk fails in " +
 		       "whatever it was writing at the time, which is rarely where " +
 		       "the problem is")
@@ -1036,10 +1036,10 @@ function update_git_checkout {
     finally { release_git_lock $lock }
 }
 function update_binpkg_module {
-    update_git_checkout "$REPOS_ROOT/vcpkg-binpkg-prototype" `
+    update_git_checkout "$script:REPOS_ROOT/vcpkg-binpkg-prototype" `
 	-origin git@github.com:rkitover/vcpkg-binpkg-prototype
 
-    import-module -global -force "$REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
+    import-module -global -force "$script:REPOS_ROOT/vcpkg-binpkg-prototype/vcpkg-binpkg.psm1"
 }
 
 # Whether bootstrap could replace the exe if it were run. Absent is writable:
@@ -1149,11 +1149,11 @@ function rewrite_vcpkg_root([string]$old_root, [string]$new_root) {
         $val = (get-item -literalpath "env:$lv" -ea ignore).value
         if (-not $val) { continue }
         set-item -literalpath "env:$lv" (
-            ($val -split $path_sep | %{
+            ($val -split $script:path_sep | %{
                 $e = $_ -replace '[/\\]+', '\'
                 if ($e -imatch "^${old_re}(?=[/\\])") { $new_root + ($e -replace "^${old_re}", '') }
                 else { $_ }
-            }) -join $path_sep
+            }) -join $script:path_sep
         )
     }
 }
@@ -1329,7 +1329,7 @@ function get-triplets {
         $tks = if ($toolkit) {
             @($toolkit)
         } elseif ($t -match $toolkit_triplet_re) {
-            @('') + $TOOLKITS
+            @('') + $script:TOOLKITS
         } else {
             @('')
         }
@@ -1356,17 +1356,17 @@ function get-triplets {
 # VBAM_TARGET_WINXP. Both have to agree: this list is what the builder
 # pre-builds and publishes, and that one is what a build asks vcpkg for.
 function get_dep_ports([string]$triplet = '') {
-    if ($triplet -match '-android$') { return $ANDROID_DEP_PORTS }
+    if ($triplet -match '-android$') { return $script:ANDROID_DEP_PORTS }
 
     if ($triplet -match '^x86-mingw') {
-	$ports = $DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]'
+	$ports = $script:DEP_PORTS -replace '^sdl3\[.*\]$', 'sdl3[vulkan]'
 
 	# Matched on the port name alone: the list holds names, and an entry here
 	# may carry a feature set -- qtbase does -- which would never equal one.
-	return @($ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $XP_SKIP_PORTS })
+	return @($ports | ?{ ($_ -replace '\[[^\]]+\]','') -notin $script:XP_SKIP_PORTS })
     }
 
-    $DEP_PORTS
+    $script:DEP_PORTS
 }
 
 # The host tooling a triplet wants: $HOST_DEP_PORTS for a triplet that can host
@@ -1376,7 +1376,7 @@ function get_dep_ports([string]$triplet = '') {
 # for the wrong machine. Kept apart from get_dep_ports because that list is what
 # a build *links*, which every triplet needs a copy of.
 function get_host_dep_ports([string]$triplet = '') {
-    if ("$triplet" -in $script:HOST_TRIPLETS) { $HOST_DEP_PORTS } else { @() }
+    if ("$triplet" -in $script:HOST_TRIPLETS) { $script:HOST_DEP_PORTS } else { @() }
 }
 
 # Plans already read, keyed by triplet, host triplet and the tree they came
@@ -1424,7 +1424,7 @@ function get_install_plan([string]$triplet, [string]$host_triplet,
     # alongside the environment, and repeating a directory it already has
     # changes nothing.
     $overlay_triplets = join-path `
-        $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $OVERLAY_PORTS }) `
+        $(if ($env:VCPKG_OVERLAY_PORTS) { $env:VCPKG_OVERLAY_PORTS } else { $script:OVERLAY_PORTS }) `
         'triplets/community'
 
     $overlay_args = if (test-path $overlay_triplets) { @('--overlay-triplets', $overlay_triplets) } else { @() }
@@ -1636,8 +1636,8 @@ function get_host_ports([string[]]$for_triplets, [string]$host_triplet,
 # Naming a package or a triplet narrows it. The order the triplets arrive in
 # does not matter, only the set.
 #
-# $script:TRIPLETS rather than $TRIPLETS, for the reason given where the lists
-# are defined. It matters more here than anywhere: read the caller's triplets
+# $script:TRIPLETS rather than $TRIPLETS, for the reason given at the top of
+# this file. It matters more here than anywhere: read the caller's triplets
 # as the platform's and every narrowed run compares equal to itself and comes
 # out whole, which is the answer that lets a refresh take 39 packages out of a
 # run that is building one.
@@ -1763,7 +1763,7 @@ function archive_build_logs([string]$port, [string]$triplet, [string]$toolkit = 
 
     if (-not $logs) { return }
 
-    $dest = "$ROOT/logs/build-failures/$(get-date -format 'yyyy-MM-dd')/$port-$triplet" +
+    $dest = "$script:ROOT/logs/build-failures/$(get-date -format 'yyyy-MM-dd')/$port-$triplet" +
             $(if ($toolkit) { "-$toolkit" })
 
     try {
@@ -1962,7 +1962,7 @@ function task_action {
 	    """`$PSDefaultParameterValues['out-file:encoding'] = 'utf8'; " +
 	    "& { try { & '$script_path'$(if ($arguments) { " $arguments" }) } " +
 	    "catch { write-output (`$_ | out-string); write-output `$_.scriptstacktrace; exit 1 } }""" +
-	    " *>> $ROOT/logs/$log")
+	    " *>> $script:ROOT/logs/$log")
 }
 
 export-modulemember -variable LOW_DISK_GB,ROOT,REPOS_ROOT,DEP_PORTS,XP_SKIP_PORTS,QT_FEATURES,COMMON_QT_FEATURES,ANDROID_QT_FEATURES,DEP_PORT_NAMES,ANDROID_DEP_PORTS,ANDROID_DEP_PORT_NAMES,HOST_DEP_PORTS,HOST_DEP_PORT_NAMES,ALL_DEP_PORT_NAMES,TRIPLETS,TOOLKITS,ANDROID_TRIPLETS,HOST_TRIPLETS,OVERLAY_PORTS `

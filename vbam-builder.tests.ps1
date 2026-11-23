@@ -2489,4 +2489,65 @@ describe 'enforce_core_features' {
     }
 }
 
+# ── how the module reads its own variables ──────────────────────────
+#
+# The three tests above shadow a list and check the answer, which is what a
+# reader wants to see the hazard in. This one is the rule itself, over the
+# whole file and over every variable the module keeps, because the next one
+# of these will be written by someone who has not read them.
+
+describe 'module variable reads' {
+
+    it 'reads every variable of its own as $script:' {
+        $ast = [management.automation.language.parser]::parsefile(
+                   $script:vbam.path, [ref]$null, [ref]$null)
+
+        function script:is_in_function($node) {
+            while ($node = $node.parent) {
+                if ($node -is [management.automation.language.functiondefinitionast]) { return $true }
+            }
+
+            $false
+        }
+
+        function script:assigned_names($node) {
+            @($node.findall({
+                param($n)
+
+                $n -is [management.automation.language.assignmentstatementast] -and
+                    $n.left -is [management.automation.language.variableexpressionast]
+            }, $true))
+        }
+
+        # What the module keeps: everything it assigns outside a function.
+        $module_vars = @(assigned_names $ast | ?{ -not (is_in_function $_) } |
+                             %{ $_.left.variablepath.userpath.tolower() } | sort-object -unique)
+
+        # The scan found the file, not an empty parse of it.
+        $module_vars | should -contain 'triplets'
+
+        $unqualified = foreach ($f in $ast.findall({
+                param($n) $n -is [management.automation.language.functiondefinitionast] }, $true)) {
+
+            # A name the function takes or sets is its own, whatever the module
+            # calls something of the same name.
+            $own = @(@($f.body.paramblock.parameters) + @($f.parameters) |
+                         ?{ $_ } | %{ $_.name.variablepath.userpath }) +
+                   @(assigned_names $f.body | %{ $_.left.variablepath.userpath })
+
+            $own = @($own | ?{ $_ } | %{ $_.tolower() })
+
+            $f.body.findall({
+                param($n) $n -is [management.automation.language.variableexpressionast]
+            }, $true) | ?{
+                $_.variablepath.isunqualified -and
+                    ($_.variablepath.userpath.tolower() -in $module_vars) -and
+                    ($_.variablepath.userpath.tolower() -notin $own)
+            } | %{ "$($f.name) line $($_.extent.startlinenumber): `$$($_.variablepath.userpath)" }
+        }
+
+        @($unqualified) | should -be @()
+    }
+}
+
 # vim:set sw=4 et:
